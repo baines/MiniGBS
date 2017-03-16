@@ -74,7 +74,7 @@ void set_note_freq(struct chan* c, float freq){
 }
 
 bool chan_muted(struct chan* c){
-	return c->user_mute || !c->enabled || !(c->on_left || c->on_right);
+	return c->user_mute || !c->enabled || !(c->on_left || c->on_right) || !c->volume;
 }
 
 void chan_enable(int i, bool enable){
