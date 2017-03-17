@@ -64,6 +64,7 @@ static float samples[DBLSAMPLES];
 static SDL_AudioDeviceID audio;
 static const float duty[] = { 0.125, 0.25, 0.5, 0.25 };
 static float logbase;
+static float vol_l, vol_r;
 static const char* notes[] = {
 	"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"
 };
@@ -160,8 +161,8 @@ void update_square(bool ch2){
 			}
 
 			if(!chan_muted(c)){
-				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25 * c->on_left;
-				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25 * c->on_right;
+				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25 * c->on_left * vol_l;
+				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25 * c->on_right * vol_r;
 			}
 		}
 	}
@@ -192,8 +193,8 @@ void update_wave(void){
 				float ss = (float)s;
 
 				if(!chan_muted(c)){
-					samples[i+0] += ((ss - diff) / 30.0f) * c->on_left;
-					samples[i+1] += ((ss - diff) / 30.0f) * c->on_right;
+					samples[i+0] += ((ss - diff) / 30.0f) * c->on_left * vol_l;
+					samples[i+1] += ((ss - diff) / 30.0f) * c->on_right * vol_r;
 				}
 			}
 		}
@@ -223,8 +224,8 @@ void update_noise(void){
 			}
 
 			if(!chan_muted(c)){
-				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25f * c->on_left;
-				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25f * c->on_right;
+				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25f * c->on_left * vol_l;
+				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25f * c->on_right * vol_r;
 			}
 		}
 	}
@@ -406,6 +407,11 @@ void audio_write(uint16_t addr, uint8_t val){
 			chans[3].freq = val >> 4;
 			chans[3].lfsr_wide = !(val & 0x08);
 			chans[3].lfsr_div = val & 0x07;
+			break;
+
+		case 0xFF24:
+			vol_l = ((val >> 4) & 0x07) / 7.0f;
+			vol_r = (val & 0x07) / 7.0f;
 			break;
 
 		case 0xFF25: {
