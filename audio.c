@@ -45,6 +45,8 @@ static struct chan {
 	struct chan_vol_env env;
 	struct chan_freq_sweep sweep;
 
+	float capacitor;
+
 	// square
 	int duty;
 
@@ -68,6 +70,12 @@ static float vol_l, vol_r;
 static const char* notes[] = {
 	"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"
 };
+
+float hipass(struct chan* c, float sample){
+	float out = sample - c->capacitor;
+	c->capacitor = sample - out * 0.996;
+	return out;
+}
 
 void set_note_freq(struct chan* c, float freq){
 	c->freq_inc = freq / FREQF;
@@ -144,6 +152,7 @@ void update_sweep(struct chan* c){
 
 void update_square(bool ch2){
 	struct chan* c = chans + ch2;
+	if(!c->powered) return;
 
 	set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
 
@@ -160,9 +169,10 @@ void update_square(bool ch2){
 				c->val = -1;
 			}
 
-			if(!chan_muted(c)){
-				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25 * c->on_left * vol_l;
-				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25 * c->on_right * vol_r;
+			float sample = hipass(c, c->val * (c->volume / 15.0f));
+			if(!c->user_mute){
+				samples[i+0] += sample * 0.25 * c->on_left * vol_l;
+				samples[i+1] += sample * 0.25 * c->on_right * vol_r;
 			}
 		}
 	}
@@ -170,6 +180,7 @@ void update_square(bool ch2){
 
 void update_wave(void){
 	struct chan* c = chans + 2;
+	if(!c->powered) return;
 
 	set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
 	c->freq_inc *= 16.0f;
@@ -189,12 +200,13 @@ void update_wave(void){
 
 			if(c->volume > 0){
 				s >>= (c->volume - 1);
-				float diff = (float[]){ 7.5f, 3.75f, 1.875 }[c->volume - 1];
+				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
 				float ss = (float)s;
 
-				if(!chan_muted(c)){
-					samples[i+0] += ((ss - diff) / 30.0f) * c->on_left * vol_l;
-					samples[i+1] += ((ss - diff) / 30.0f) * c->on_right * vol_r;
+				float sample = hipass(c, (ss - diff) / 7.5f);
+				if(!c->user_mute){
+					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
+					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 				}
 			}
 		}
@@ -203,6 +215,7 @@ void update_wave(void){
 
 void update_noise(void){
 	struct chan* c = chans + 3;
+	if(!c->powered) return;
 
 	float freq = 4194304.0f / (float)((int[]){ 8, 16, 32, 48, 64, 80, 96, 112 }[c->lfsr_div] << c->freq);
 	set_note_freq(c, c->freq < 14 ? freq : 0.0f);
@@ -223,9 +236,10 @@ void update_noise(void){
 				}
 			}
 
-			if(!chan_muted(c)){
-				samples[i+0] += c->val * (c->volume / 15.0f) * 0.25f * c->on_left * vol_l;
-				samples[i+1] += c->val * (c->volume / 15.0f) * 0.25f * c->on_right * vol_r;
+			float sample = hipass(c, c->val * (c->volume / 15.0f));
+			if(!c->user_mute){
+				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
+				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
 		}
 	}
@@ -364,6 +378,7 @@ void audio_write(uint16_t addr, uint8_t val){
 		case 0xFF17:
 		case 0xFF21:
 			chans[i].volume = chans[i].volume_init = val >> 4;
+			chans[i].powered = val >> 4;
 			break;
 
 		case 0xFF1C:
@@ -389,6 +404,7 @@ void audio_write(uint16_t addr, uint8_t val){
 			break;
 
 		case 0xFF1A:
+			chans[i].powered = val & 0x80;
 			chan_enable(i, val & 0x80);
 			break;
 
