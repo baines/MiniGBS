@@ -631,8 +631,6 @@ void set_msg(const char* fmt, ...){
 	va_end(va);
 }
 
-static uint64_t prev_time;
-
 uint64_t get_time(void){
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -881,7 +879,10 @@ int main(int argc, char** argv){
 
 	cfg.volume = 1.0f;
 	audio_init();
-	
+
+	// hack to avoid ALSA warnings breaking the UI
+	fclose(stderr);
+
 	bool paused;
 restart:
 
@@ -910,6 +911,8 @@ restart:
 	paused = false;
 	audio_pause(false);
 
+	uint64_t prev_output_time = 0, prev_input_time = 0;
+
 	while(1){
 
 		if(paused){
@@ -936,11 +939,13 @@ restart:
 				refresh();
 			}
 
-			usleep(10000);
+			uint64_t diff = get_time() - prev_output_time;
+			if(diff < 15) usleep(15000-1000*diff);
+			prev_output_time = get_time();
 		}
 
-		if(cfg.hide_ui || get_time() - prev_time < 50) continue;
-		prev_time = get_time();
+		if(cfg.hide_ui || get_time() - prev_input_time < 50) continue;
+		prev_input_time = get_time();
 
 		if(msg_timer > 0){
 			int x, y;
@@ -959,7 +964,7 @@ restart:
 		int key;
 		switch((key = getch())){
 
-			case 27:
+			case 27: // Escape
 				if(getch() != -1) break;
 			case 'q':
 				goto end;
@@ -1011,6 +1016,10 @@ restart:
 			case '_':
 				cfg.volume = MAX(0.0f, cfg.volume - 0.1f);
 				set_msg("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
+				break;
+
+			case 12: // CTRL-L
+				clear();
 				break;
 
 			default:

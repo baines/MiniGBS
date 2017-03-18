@@ -233,6 +233,7 @@ void update_noise(void){
 
 bool audio_mute(int chan, int val){
 	chans[chan-1].user_mute = (val != -1) ? val : !chans[chan-1].user_mute;
+	return chans[chan-1].user_mute;
 }
 
 void audio_output(){
@@ -251,7 +252,7 @@ void audio_output(){
 			if(!chan_muted(chans + i)){
 				printw("[ ");
 				attron(COLOR_PAIR(i+1));
-				int octave = MAX(0, MIN(chans[i].note / 12, 9));;
+				int octave = MAX(0, MIN(chans[i].note / 12, 9));
 				printw("%s%d", notes[chans[i].note % 12], octave);
 				attroff(COLOR_PAIR(i+1));
 				printw(" ]     ");
@@ -266,7 +267,7 @@ void audio_output(){
 		samples[i] *= cfg.volume;
 	}
 
-	while(SDL_GetQueuedAudioSize(audio) > (SAMPLES * sizeof(float) * 5)){
+	while(SDL_GetQueuedAudioSize(audio) > (SAMPLES * sizeof(float) * 15)){
 		usleep(250);
 	}
 	
