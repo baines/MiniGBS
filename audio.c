@@ -102,8 +102,13 @@ void update_env(struct chan* c){
 	c->env.counter += c->env.inc;
 
 	while(c->env.counter > 1.0f){
-		c->volume += c->env.up ? 1 : -1;
-		c->volume = MAX(0, MIN(15, c->volume));
+		if(c->env.step){
+			c->volume += c->env.up ? 1 : -1;
+			if(c->volume == 0 || c->volume == 15){
+				c->env.inc = 0;
+			}
+			c->volume = MAX(0, MIN(15, c->volume));
+		}
 		c->env.counter -= 1.0f;
 	}
 }
@@ -332,7 +337,7 @@ void chan_trigger(int i){
 
 		c->env.step    = val & 0x07;
 		c->env.up      = val & 0x08;
-		c->env.inc     = c->env.step ? (64.0f / (float)c->env.step) / FREQF : 0.0f;
+		c->env.inc     = c->env.step ? (64.0f / (float)c->env.step) / FREQF : 8.0f / FREQF;
 		c->env.counter = 0.0f;
 	}
 
@@ -376,10 +381,26 @@ void audio_write(uint16_t addr, uint8_t val){
 
 		case 0xFF12:
 		case 0xFF17:
-		case 0xFF21:
-			chans[i].volume = chans[i].volume_init = val >> 4;
-			chans[i].powered = val >> 4;
-			break;
+		case 0xFF21: {
+			chans[i].volume_init = val >> 4;
+			chans[i].powered = val >> 3;
+
+			// "zombie mode" stuff, needed for Prehistorik Man and probably others
+			if(chans[i].powered && chans[i].enabled){
+
+				if((chans[i].env.step == 0 && chans[i].env.inc != 0) || !chans[i].env.up){
+					chans[i].volume++;
+				}
+
+				if((val & 0x08) == chans[i].env.up){
+					chans[i].volume = 16 - chans[i].volume;
+				}
+
+				chans[i].volume &= 0x0F;
+				chans[i].env.step = val & 0x07;
+				chans[i].env.inc = 0;
+			}
+		} break;
 
 		case 0xFF1C:
 			chans[i].volume = chans[i].volume_init = (val >> 5) & 0x03;

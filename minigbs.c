@@ -37,7 +37,7 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 		audio_write(addr, val);
 		next_counter = 0;
 	} else if(addr < 0x2000){
-		//printf("rom write?: [%4x] <- [%2x]\n", addr, val);
+		printf("rom write?: [%4x] <- [%2x]\n", addr, val);
 	} else {
 		if(cfg.debug_mode){
 			switch(addr){
@@ -358,7 +358,7 @@ bool cpu_step(void){
 
 	OP(addsp, 2, 16, {
 		regs.flags.h = (((regs.sp&0x0FFF) + (mem_read(regs.pc+1)&0x0F)) & 0x1000) == 0x1000;
-		regs.flags.c = __builtin_add_overflow(regs.sp, mem_read(regs.pc+1), (int16_t*)&regs.sp);
+		regs.flags.c = __builtin_add_overflow(regs.sp, (int8_t)mem_read(regs.pc+1), (int16_t*)&regs.sp);
 		regs.flags.z = regs.flags.n = 0;
 	});
 
@@ -367,7 +367,7 @@ bool cpu_step(void){
 	});
 
 	OP(ldsp, 2, 12, {
-		regs.hl = *(uint16_t*)(mem + regs.sp + (char)mem[regs.pc+1]);
+		regs.hl = regs.sp + (char)mem[regs.pc+1];
 		regs.flags.h = regs.flags.n = regs.flags.z = regs.flags.c = 0; // XXX: probably wrong
 	});
 
@@ -834,16 +834,16 @@ int main(int argc, char** argv){
 	}
 
 	static const uint8_t regs_init[] = {
-		0x80, 0xBF, 0xF3, 0xFF, 0xBF, 0xFF, 0x3F, 0x00,
-		0xFF, 0xBF, 0x7F, 0xFF, 0x9F, 0xFF, 0xBF, 0xFF,
-		0xFF, 0x00, 0x00, 0xBF, 0x77, 0xF3, 0xF1,
+		0x80, 0xBF, 0xF3, 0xFF, 0x3F, 0xFF, 0x3F, 0x00,
+		0xFF, 0x3F, 0x7F, 0xFF, 0x9F, 0xFF, 0x3F, 0xFF,
+		0xFF, 0x00, 0x00, 0x3F, 0x77, 0xF3, 0xF1,
 	};
 
 	static const uint8_t wave_init[] = {
-		0x00, 0xFF, 0x00, 0xFF,
-		0x00, 0xFF, 0x00, 0xFF,
-		0x00, 0xFF, 0x00, 0xFF,
-		0x00, 0xFF, 0x00, 0xFF,
+		0xac, 0xdd, 0xda, 0x48,
+		0x36, 0x02, 0xcf, 0x16,
+		0x2c, 0x04, 0xe5, 0x2c,
+		0xac, 0xdd, 0xda, 0x48
 	};
 
 	if(!cfg.hide_ui){
@@ -893,7 +893,8 @@ restart:
 	memset(&regs, 0, sizeof(regs));
 	memset(mem + 0x8000, 0, 0x8000);
 
-	memcpy(mem, mem + h.load_addr, 0x40);
+	memcpy(mem, mem + h.load_addr, 0x62);
+	memset(mem + 0x62, 0xFF, 0x9D);
 
 	regs.sp = h.sp - 2;
 	regs.pc = h.init_addr;
