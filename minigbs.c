@@ -36,7 +36,7 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 		}
 		audio_write(addr, val);
 		next_counter = 0;
-	} else if(addr < 0x2000){
+	} else if(addr < 0x8000){
 		if(cfg.debug_mode){
 			printf("rom write?: [%4x] <- [%2x]\n", addr, val);
 		}
