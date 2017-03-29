@@ -245,8 +245,8 @@ bool cpu_step(void){
 	});
 
 	OP(stsp, 3, 20, {
-		mem_write(NN  , regs.sp >> 8);
-		mem_write(NN+1, regs.sp & 0xFF);
+		mem_write(NN+1, regs.sp >> 8);
+		mem_write(NN  , regs.sp & 0xFF);
 	});
 
 	OP(stop, 2, 4, {
@@ -758,7 +758,7 @@ int main(int argc, char** argv){
 		return 1;
 	}
 
-	cfg.song_no = argc > 2 ? atoi(argv[2]) : 0;
+	cfg.song_no = argc > 2 ? atoi(argv[2]) : MAX(0, h.start_song - 1);
 	if(cfg.song_no >= h.song_count){
 		fprintf(stderr, "The file says it has %d tracks, index %d is out of range.\n", h.song_count, cfg.song_no);
 		return 1;
