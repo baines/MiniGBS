@@ -363,8 +363,6 @@ void chan_trigger(int i){
 
 	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQF;
 	c->len.counter = 0.0f;
-	
-	c->freq_counter = 0.0f;
 
 	c->val = 0;
 }
