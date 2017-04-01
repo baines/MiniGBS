@@ -300,6 +300,7 @@ void audio_pause(bool p){
 void audio_reset(void){
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, sizeof(samples));
+	SDL_ClearQueuedAudio(audio);
 }
 
 void audio_init(void){
