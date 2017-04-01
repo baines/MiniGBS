@@ -58,7 +58,7 @@ static struct chan {
 
 #define FREQ 44100
 #define FREQF ((float)FREQ)
-#define HZ 59.7f
+#define HZ 60
 #define SAMPLES ((FREQ / (int)HZ))
 #define DBLSAMPLES (SAMPLES*2)
 
@@ -295,6 +295,11 @@ void audio_output(){
 
 void audio_pause(bool p){
 	SDL_PauseAudioDevice(audio, p);
+}
+
+void audio_reset(void){
+	memset(chans, 0, sizeof(chans));
+	memset(samples, 0, sizeof(samples));
 }
 
 void audio_init(void){

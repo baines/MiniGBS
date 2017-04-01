@@ -888,6 +888,7 @@ int main(int argc, char** argv){
 	bool paused;
 restart:
 
+	audio_reset();
 	clear();
 	if(banks[0]) memcpy(mem, banks[0], 0x4000);
 	if(banks[1]) memcpy(mem + 0x4000, banks[1], 0x4000);

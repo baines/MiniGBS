@@ -8,6 +8,7 @@
 void debug_dump(uint8_t* op);
 
 void audio_output(void);
+void audio_reset(void);
 void audio_init(void);
 void audio_write(uint16_t addr, uint8_t val);
 void audio_pause(bool);
