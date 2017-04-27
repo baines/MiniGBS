@@ -49,22 +49,27 @@ static struct chan {
 
 	// square
 	int duty;
+	float fval;
 
 	// noise
 	uint16_t lfsr_reg;
 	bool     lfsr_wide;
 	int      lfsr_div;
+
+	// wave
+	int sample_cursor;
+	float sample;
 } chans[4];
 
 #define FREQ 44100
 #define FREQF ((float)FREQ)
-#define HZ 60
+#define HZ 59.7f
 #define SAMPLES ((FREQ / (int)HZ))
 #define DBLSAMPLES (SAMPLES*2)
 
 static float samples[DBLSAMPLES];
 static SDL_AudioDeviceID audio;
-static const float duty[] = { 0.125, 0.25, 0.5, 0.25 };
+static const float duty[] = { 0.125, 0.25, 0.5, 0.75 };
 static float logbase;
 static float vol_l, vol_r;
 static const char* notes[] = {
@@ -155,11 +160,15 @@ void update_sweep(struct chan* c){
 	}
 }
 
+float lerp(float a, float b, float t){
+	return a + (b - a) * t;
+}
+
 void update_square(bool ch2){
 	struct chan* c = chans + ch2;
 	if(!c->powered) return;
 
-	set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
+	set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
 
 	for(int i = 0; i < DBLSAMPLES; i+=2){
 		update_len(c);
@@ -168,16 +177,20 @@ void update_square(bool ch2){
 			update_env(c);
 			if(!ch2) update_sweep(c);
 
+			float d;
 			if(update_freq(c)){
-				c->val = 1;
-			} else if(c->freq_counter > duty[c->duty]){
-				c->val = -1;
+				c->fval = (2*c->freq_counter - c->freq_inc) / c->freq_inc;
+			} else if((d = c->freq_counter - duty[c->duty]) > 0.0f){
+				c->fval = MAX(-1.0f, (c->freq_inc - 2*d) / c->freq_inc);
+			} else {
+				c->fval = 1.0f;
 			}
 
-			float sample = hipass(c, c->val * (c->volume / 15.0f));
+			float sample = hipass(c, c->fval * (c->volume / 15.0f));
+
 			if(!c->user_mute){
-				samples[i+0] += sample * 0.25 * c->on_left * vol_l;
-				samples[i+1] += sample * 0.25 * c->on_right * vol_r;
+				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
+				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
 		}
 	}
@@ -194,10 +207,16 @@ void update_wave(void){
 		update_len(c);
 
 		if(c->enabled){
-			c->val = (c->val + update_freq(c)) & 31;
+			float t = 1.0f;
 
-			uint8_t s = mem[0xFF30 + c->val / 2];
-			if(c->val & 1){
+			if(update_freq(c)){
+				c->sample_cursor = c->val;
+				c->val = (c->val + 1) & 31;
+				t = c->freq_counter / c->freq_inc;
+			}
+
+			uint8_t s = mem[0xFF30 + c->sample_cursor / 2];
+			if(c->sample_cursor & 1){
 				s &= 0xF;
 			} else {
 				s >>= 4;
@@ -206,9 +225,9 @@ void update_wave(void){
 			if(c->volume > 0){
 				s >>= (c->volume - 1);
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
-				float ss = (float)s;
+				c->sample = lerp(c->sample, (float)s, t);
 
-				float sample = hipass(c, (ss - diff) / 7.5f);
+				float sample = hipass(c, (c->sample - diff) / 7.5f);
 				if(!c->user_mute){
 					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
@@ -333,7 +352,12 @@ void audio_init(void){
 
 void chan_trigger(int i){
 	struct chan* c = chans + i;
-	
+
+	if(cfg.debug_mode){
+		static const char* cname[] = { "sq1", "sq2", "wave", "noise" };
+		printf("(trigger %s)\n", cname[i]);
+	}
+
 	chan_enable(i, 1);
 	c->volume = c->volume_init;
 
@@ -370,7 +394,11 @@ void chan_trigger(int i){
 	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQF;
 	c->len.counter = 0.0f;
 
-	c->val = 0;
+	if(i < 2){
+		c->val = 1;
+	} else {
+		c->val = 0;
+	}
 }
 
 void audio_write(uint16_t addr, uint8_t val){
@@ -392,17 +420,21 @@ void audio_write(uint16_t addr, uint8_t val){
 			// "zombie mode" stuff, needed for Prehistorik Man and probably others
 			if(chans[i].powered && chans[i].enabled){
 
-				if((chans[i].env.step == 0 && chans[i].env.inc != 0) || !chans[i].env.up){
-					chans[i].volume++;
-				}
-
-				if((val & 0x08) == chans[i].env.up){
+				if((chans[i].env.step == 0 && chans[i].env.inc != 0)){
+					if(val & 0x08){
+						if(cfg.debug_mode) puts("(zombie vol++)");
+						chans[i].volume++;
+					} else {
+						if(cfg.debug_mode) puts("(zombie vol+=2)");
+						chans[i].volume+=2;
+					}
+				} else {
+					if(cfg.debug_mode) puts("(zombie swap)");
 					chans[i].volume = 16 - chans[i].volume;
 				}
 
 				chans[i].volume &= 0x0F;
 				chans[i].env.step = val & 0x07;
-				chans[i].env.inc = 0;
 			}
 		} break;
 

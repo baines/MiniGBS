@@ -897,7 +897,6 @@ restart:
 	memset(mem + 0x8000, 0, 0x8000);
 
 	memcpy(mem, mem + h.load_addr, 0x62);
-	memset(mem + 0x62, 0xFF, 0x9D);
 
 	regs.sp = h.sp - 2;
 	regs.pc = h.init_addr;
