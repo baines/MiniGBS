@@ -32,7 +32,7 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 		bank_switch(val);
 	} else if(addr >= 0xFF10 && addr <= 0xFF40){
 		if(!cfg.subdued && mem[addr] != val){
-			boldness[addr - 0xFF10] = 8;
+			boldness[addr - 0xFF10] = (int)audio_rate >> 3;
 		}
 		audio_write(addr, val);
 		next_counter = 0;
@@ -40,13 +40,14 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 		if(cfg.debug_mode){
 			printf("rom write?: [%4x] <- [%2x]\n", addr, val);
 		}
+	} else if(addr == 0xFF06 || addr == 0xFF07){
+		mem[addr] = val;
+		audio_update_rate();
 	} else {
 		if(cfg.debug_mode){
 			switch(addr){
 				case 0xFF04: printf("DIV write: %2x\n", val); break;
 				case 0xFF05: printf("TIMA write: %2x\n", val); break;
-				case 0xFF06: printf("TMA write: %2x\n", val); break;
-				case 0xFF07: printf("TAC write: %2x\n", val); break;
 				case 0xFF0F: printf("IF write: %2x\n", val); break;
 				case 0xFF41: printf("STAT: %2x\n", val); break;
 				case 0xFF46: printf("DMA: %2x\n", val); break;
@@ -636,7 +637,7 @@ void set_msg(const char* fmt, ...){
 uint64_t get_time(void){
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (ts.tv_sec * 1000UL) + (ts.tv_nsec / 1000000UL);
+	return (ts.tv_sec * 1000000UL) + (ts.tv_nsec / 1000UL);
 }
 
 void ui_draw_info(void){
@@ -823,18 +824,6 @@ int main(int argc, char** argv){
 	}
 	fclose(f);
 
-	if(h.tac & 0x04){
-		int rates[] = { 4096, 262144, 65536, 16384 };
-		float rate = rates[h.tac & 0x03] / (float)(256 - h.tma);
-		if(h.tac & 0x80) rate *= 2.0f;
-
-		if(fabsf(rate - 59.7f) > 1.0f){
-			printf("NOTE: This GBS uses tma/tac timing instead of vblank [NYI] [%.4fhz].\n"
-			       "      Songs might be broken or play a bit too %s.\n",
-			       rate, rate > 59.7f ? "slow" : "fast");
-		}
-	}
-
 	static const uint8_t regs_init[] = {
 		0x80, 0xBF, 0xF3, 0xFF, 0x3F, 0xFF, 0x3F, 0x00,
 		0xFF, 0x3F, 0x7F, 0xFF, 0x9F, 0xFF, 0x3F, 0xFF,
@@ -879,6 +868,9 @@ int main(int argc, char** argv){
 		getmaxyx(stdscr, cfg.win_h, cfg.win_w);
 	}
 
+	mem[0xff06] = h.tma;
+	mem[0xff07] = h.tac;
+
 	cfg.volume = 1.0f;
 	audio_init();
 
@@ -914,9 +906,15 @@ restart:
 	paused = false;
 	audio_pause(false);
 
-	uint64_t prev_output_time = 0, prev_input_time = 0;
+	uint64_t prev_output_time = 0, prev_ui_time = 0;
+	bool redraw_note_freq = false;
 
 	while(1){
+
+		bool redraw_ui = !cfg.hide_ui && (get_time() - prev_ui_time) > 16667UL;
+		if(redraw_ui){
+			redraw_note_freq = true;
+		}
 
 		if(paused){
 			usleep(20000);
@@ -924,7 +922,7 @@ restart:
 			regs.pc = h.play_addr;
 			regs.sp -= 2;
 
-			if(next_counter++ > 90){
+			if(next_counter > 90){
 				cfg.song_no = (cfg.song_no + 1) % h.song_count;
 				set_msg("Next\n");
 				goto restart;
@@ -934,7 +932,8 @@ restart:
 				puts("-------------------------");
 			}
 
-			audio_output();
+			audio_output(redraw_note_freq);
+			redraw_note_freq = false;
 
 			if(!cfg.hide_ui){
 				ui_draw_info();
@@ -943,12 +942,13 @@ restart:
 			}
 
 			uint64_t diff = get_time() - prev_output_time;
-			if(diff < 15) usleep(15000-1000*diff);
+			int64_t slp = (1000000UL / audio_rate) - (diff + 1000);
+			if(slp > 5000) usleep(slp);
 			prev_output_time = get_time();
 		}
 
-		if(cfg.hide_ui || get_time() - prev_input_time < 50) continue;
-		prev_input_time = get_time();
+		if(!redraw_ui) continue;
+		prev_ui_time = get_time();
 
 		if(msg_timer > 0){
 			int x, y;

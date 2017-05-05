@@ -7,12 +7,13 @@
 
 void debug_dump(uint8_t* op);
 
-void audio_output(void);
+void audio_output(bool redraw);
 void audio_reset(void);
 void audio_init(void);
 void audio_write(uint16_t addr, uint8_t val);
 void audio_pause(bool);
 bool audio_mute(int chan, int val);
+void audio_update_rate();
 
 struct GBSHeader {
 	char     id[3];
@@ -61,6 +62,7 @@ struct Config {
 
 extern struct Config cfg;
 extern uint8_t* mem;
+extern float audio_rate;
 
 #define MAX(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a >  _b ? _a : _b; })
 #define MIN(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a <= _b ? _a : _b; })

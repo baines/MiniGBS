@@ -61,13 +61,13 @@ static struct chan {
 	float sample;
 } chans[4];
 
-#define FREQ 44100
-#define FREQF ((float)FREQ)
-#define HZ 59.7f
-#define SAMPLES ((FREQ / (int)HZ))
-#define DBLSAMPLES (SAMPLES*2)
+#define FREQ 44100.0f
 
-static float samples[DBLSAMPLES];
+float audio_rate;
+
+static size_t nsamples;
+static float* samples;
+
 static SDL_AudioDeviceID audio;
 static const float duty[] = { 0.125, 0.25, 0.5, 0.75 };
 static float logbase;
@@ -83,7 +83,7 @@ float hipass(struct chan* c, float sample){
 }
 
 void set_note_freq(struct chan* c, float freq){
-	c->freq_inc = freq / FREQF;
+	c->freq_inc = freq / FREQ;
 	c->note = MAX(0, (int)roundf(logf(freq/440.0f) / logbase) + 48);
 }
 
@@ -170,7 +170,7 @@ void update_square(bool ch2){
 
 	set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
 
-	for(int i = 0; i < DBLSAMPLES; i+=2){
+	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
 
 		if(c->enabled){
@@ -203,7 +203,7 @@ void update_wave(void){
 	set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
 	c->freq_inc *= 16.0f;
 
-	for(int i = 0; i < DBLSAMPLES; i+=2){
+	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
 
 		if(c->enabled){
@@ -244,7 +244,7 @@ void update_noise(void){
 	float freq = 4194304.0f / (float)((int[]){ 8, 16, 32, 48, 64, 80, 96, 112 }[c->lfsr_div] << c->freq);
 	set_note_freq(c, c->freq < 14 ? freq : 0.0f);
 
-	for(int i = 0; i < DBLSAMPLES; i+=2){
+	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
 
 		if(c->enabled){
@@ -274,8 +274,8 @@ bool audio_mute(int chan, int val){
 	return chans[chan-1].user_mute;
 }
 
-void audio_output(){
-	memset(samples, 0, sizeof(samples));
+void audio_output(bool redraw){
+	memset(samples, 0, nsamples * sizeof(float));
 
 	update_square(0);
 	update_square(1);
@@ -283,7 +283,7 @@ void audio_output(){
 	update_noise();
 
 	// draw notes
-	if(!cfg.hide_ui){
+	if(redraw){
 		move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+9);
 		attron(A_BOLD);
 		for(int i = 0; i < 3; ++i){
@@ -301,15 +301,18 @@ void audio_output(){
 		attroff(A_BOLD);
 	}
 
-	for(int i = 0; i < SAMPLES*2; ++i){
+	for(int i = 0; i < nsamples; ++i){
 		samples[i] *= cfg.volume;
 	}
 
-	while(SDL_GetQueuedAudioSize(audio) > (SAMPLES * sizeof(float) * 15)){
-		usleep(250);
+	uint64_t cur_size = SDL_GetQueuedAudioSize(audio) / (2 * sizeof(float));
+	uint64_t max_size = FREQ / 8; // max 125ms buffer
+
+	if(cur_size > max_size){
+		usleep(((cur_size - max_size) / FREQ) * 1000000.0f);
 	}
 	
-	SDL_QueueAudio(audio, samples, sizeof(samples));
+	SDL_QueueAudio(audio, samples, nsamples * sizeof(float));
 }
 
 void audio_pause(bool p){
@@ -318,7 +321,7 @@ void audio_pause(bool p){
 
 void audio_reset(void){
 	memset(chans, 0, sizeof(chans));
-	memset(samples, 0, sizeof(samples));
+	memset(samples, 0, nsamples * sizeof(float));
 	SDL_ClearQueuedAudio(audio);
 }
 
@@ -346,8 +349,31 @@ void audio_init(void){
 
 	logbase = log(1.059463094f);
 
-	SDL_QueueAudio(audio, samples, sizeof(samples));
+	audio_update_rate();
+
+	SDL_QueueAudio(audio, samples, nsamples * sizeof(float));
 	SDL_PauseAudioDevice(audio, 0);
+}
+
+void audio_update_rate(void){
+	audio_rate = 59.7f;
+
+	uint8_t tma = mem[0xff06];
+	uint8_t tac = mem[0xff07];
+
+	if(tac & 0x04){
+		int rates[] = { 4096, 262144, 65536, 16384 };
+		audio_rate = rates[tac & 0x03] / (float)(256 - tma);
+		if(tac & 0x80) audio_rate *= 2.0f;
+	}
+
+	if(cfg.debug_mode){
+		printf("Audio rate changed: %.4f\n", audio_rate);
+	}
+
+	free(samples);
+	nsamples = (int)(FREQ / audio_rate) * 2;
+	samples  = calloc(nsamples, sizeof(float));
 }
 
 void chan_trigger(int i){
@@ -367,7 +393,7 @@ void chan_trigger(int i){
 
 		c->env.step    = val & 0x07;
 		c->env.up      = val & 0x08;
-		c->env.inc     = c->env.step ? (64.0f / (float)c->env.step) / FREQF : 8.0f / FREQF;
+		c->env.inc     = c->env.step ? (64.0f / (float)c->env.step) / FREQ : 8.0f / FREQ;
 		c->env.counter = 0.0f;
 	}
 
@@ -379,7 +405,7 @@ void chan_trigger(int i){
 		c->sweep.rate    = (val >> 4) & 0x07;
 		c->sweep.up      = !(val & 0x08);
 		c->sweep.shift   = (val & 0x07);
-		c->sweep.inc     = c->sweep.rate ? (128.0f / (float)(c->sweep.rate + 1)) / FREQF : 0.0f;
+		c->sweep.inc     = c->sweep.rate ? (128.0f / (float)(c->sweep.rate + 1)) / FREQ : 0.0f;
 		c->sweep.counter = 0.0f;
 	}
 
@@ -391,7 +417,7 @@ void chan_trigger(int i){
 		c->lfsr_reg = 0xFFFF;
 	}
 
-	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQF;
+	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQ;
 	c->len.counter = 0.0f;
 
 	if(i < 2){
