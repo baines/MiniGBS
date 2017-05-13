@@ -250,7 +250,9 @@ void update_noise(void){
 		if(c->enabled){
 			update_env(c);
 
-			if(update_freq(c)){
+			float sample = c->val;
+			int count = update_freq(c);
+			for(int j = 0; j < count; ++j){
 				c->lfsr_reg = (c->lfsr_reg << 1) | (c->val == 1);
 
 				if(c->lfsr_wide){
@@ -258,9 +260,14 @@ void update_noise(void){
 				} else {
 					c->val = !(((c->lfsr_reg >> 6 ) & 1) ^ ((c->lfsr_reg >> 5 ) & 1)) ? 1 : -1;
 				}
+				sample += c->val;
 			}
 
-			float sample = hipass(c, c->val * (c->volume / 15.0f));
+			if(count){
+				sample /= (float)count;
+			}
+
+			sample = hipass(c, sample * (c->volume / 15.0f));
 			if(!c->user_mute){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
