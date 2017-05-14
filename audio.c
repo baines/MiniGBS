@@ -49,7 +49,7 @@ static struct chan {
 
 	// square
 	int duty;
-	float fval;
+	int duty_counter;
 
 	// noise
 	uint16_t lfsr_reg;
@@ -58,7 +58,7 @@ static struct chan {
 
 	// wave
 	int sample_cursor;
-	float sample;
+	uint8_t sample;
 } chans[4];
 
 #define FREQ 44100.0f
@@ -69,7 +69,7 @@ static size_t nsamples;
 static float* samples;
 
 static SDL_AudioDeviceID audio;
-static const float duty[] = { 0.125, 0.25, 0.5, 0.75 };
+static const int duty_lookup[] = { 1, 2, 4, 6 };
 static float logbase;
 static float vol_l, vol_r;
 static const char* notes[] = {
@@ -119,7 +119,6 @@ void update_env(struct chan* c){
 }
 
 void update_len(struct chan* c){
-
 	if(c->len.enabled){
 		c->len.counter += c->len.inc;
 		if(c->len.counter > 1.0f){
@@ -129,16 +128,18 @@ void update_len(struct chan* c){
 	}
 }
 
-int update_freq(struct chan* c){
-	c->freq_counter += c->freq_inc;
+bool update_freq(struct chan* c, float* pos){
+	float inc = c->freq_inc - *pos;
+	c->freq_counter += inc;
 
-	int result = 0;
-	while(c->freq_counter > 1.0f){
-		c->freq_counter -= 1.0f;
-		result++;
+	if(c->freq_counter > 1.0f){
+		*pos = c->freq_inc - (c->freq_counter - 1.0f);
+		c->freq_counter = 0.0f;
+		return true;
+	} else {
+		*pos = c->freq_inc;
+		return false;
 	}
-
-	return result;
 }
 
 void update_sweep(struct chan* c){
@@ -152,7 +153,8 @@ void update_sweep(struct chan* c){
 			c->freq += inc;
 			c->sweep.freq = c->freq;
 
-			set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
+			set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
+			c->freq_inc *= 8.0f;
 		} else {
 			c->enabled = 0;
 		}
@@ -160,15 +162,12 @@ void update_sweep(struct chan* c){
 	}
 }
 
-float lerp(float a, float b, float t){
-	return a + (b - a) * t;
-}
-
 void update_square(bool ch2){
 	struct chan* c = chans + ch2;
 	if(!c->powered) return;
 
 	set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
+	c->freq_inc *= 8.0f;
 
 	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
@@ -177,16 +176,21 @@ void update_square(bool ch2){
 			update_env(c);
 			if(!ch2) update_sweep(c);
 
-			float d;
-			if(update_freq(c)){
-				c->fval = (2*c->freq_counter - c->freq_inc) / c->freq_inc;
-			} else if((d = c->freq_counter - duty[c->duty]) > 0.0f){
-				c->fval = MAX(-1.0f, (c->freq_inc - 2*d) / c->freq_inc);
-			} else {
-				c->fval = 1.0f;
-			}
+			float pos = 0.0f;
+			float prev_pos = 0.0f;
+			float sample = 0.0f;
 
-			float sample = hipass(c, c->fval * (c->volume / 15.0f));
+			while(update_freq(c, &pos)){
+				c->duty_counter = (c->duty_counter + 1) & 7;
+				sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
+
+				if(!c->duty_counter || c->duty_counter == c->duty){
+					c->val = ~(c->val-1);
+				}
+				prev_pos = pos;
+			}
+			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
+			sample = hipass(c, sample * (c->volume / 15.0f));
 
 			if(!c->user_mute){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
@@ -200,34 +204,41 @@ void update_wave(void){
 	struct chan* c = chans + 2;
 	if(!c->powered) return;
 
-	set_note_freq(c, 4194304 / (float)((2048 - c->freq) << 5));
-	c->freq_inc *= 16.0f;
+	float freq = 4194304.0f / (float)((2048 - c->freq) << 5);
+	set_note_freq(c, freq);
+
+	if(freq >= 131079) c->enabled = false;
+	else c->freq_inc *= 16.0f;
 
 	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
 
 		if(c->enabled){
-			float t = 1.0f;
+			float pos = 0.0f;
+			float prev_pos = 0.0f;
+			float sample = 0.0f;
 
-			if(update_freq(c)){
+			while(update_freq(c, &pos)){
 				c->sample_cursor = c->val;
 				c->val = (c->val + 1) & 31;
-				t = c->freq_counter / c->freq_inc;
-			}
 
-			uint8_t s = mem[0xFF30 + c->sample_cursor / 2];
-			if(c->sample_cursor & 1){
-				s &= 0xF;
-			} else {
-				s >>= 4;
+				c->sample = mem[0xFF30 + c->sample_cursor / 2];
+				if(c->sample_cursor & 1){
+					c->sample &= 0xF;
+				} else {
+					c->sample >>= 4;
+				}
+
+				c->sample = (c->volume) ? (c->sample >> (c->volume-1)) : 0;
+				sample += ((pos - prev_pos) / c->freq_inc) * c->sample;
+				prev_pos = pos;
 			}
+			sample += ((pos - prev_pos) / c->freq_inc) * c->sample;
 
 			if(c->volume > 0){
-				s >>= (c->volume - 1);
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
-				c->sample = lerp(c->sample, (float)s, t);
+				sample = hipass(c, (sample - diff) / 7.5f);
 
-				float sample = hipass(c, (c->sample - diff) / 7.5f);
 				if(!c->user_mute){
 					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
@@ -250,9 +261,11 @@ void update_noise(void){
 		if(c->enabled){
 			update_env(c);
 
-			float sample = c->val;
-			int count = update_freq(c);
-			for(int j = 0; j < count; ++j){
+			float pos = 0.0f;
+			float prev_pos = 0.0f;
+			float sample = 0.0f;
+
+			while(update_freq(c, &pos)){
 				c->lfsr_reg = (c->lfsr_reg << 1) | (c->val == 1);
 
 				if(c->lfsr_wide){
@@ -260,14 +273,12 @@ void update_noise(void){
 				} else {
 					c->val = !(((c->lfsr_reg >> 6 ) & 1) ^ ((c->lfsr_reg >> 5 ) & 1)) ? 1 : -1;
 				}
-				sample += c->val;
+				sample += ((pos - prev_pos) / c->freq_inc) * c->val;
+				prev_pos = pos;
 			}
-
-			if(count){
-				sample /= (float)count;
-			}
-
+			sample += ((pos - prev_pos) / c->freq_inc) * c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
+
 			if(!c->user_mute){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
@@ -330,6 +341,7 @@ void audio_reset(void){
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
 	SDL_ClearQueuedAudio(audio);
+	chans[0].val = chans[1].val = 1;
 }
 
 void audio_init(void){
@@ -420,18 +432,14 @@ void chan_trigger(int i){
 
 	if(i == 2){ // wave
 		len_max = 256;
+		c->val = 0;
 	} else if(i == 3){ // noise
 		c->lfsr_reg = 0xFFFF;
+		c->val = -1;
 	}
 
 	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQ;
 	c->len.counter = 0.0f;
-
-	if(i < 2){
-		c->val = 1;
-	} else {
-		c->val = 0;
-	}
 }
 
 void audio_write(uint16_t addr, uint8_t val){
@@ -479,7 +487,7 @@ void audio_write(uint16_t addr, uint8_t val){
 		case 0xFF16:
 		case 0xFF20:
 			chans[i].len.load = val & 0x3f;
-			chans[i].duty = val >> 6;
+			chans[i].duty = duty_lookup[val >> 6];
 			break;
 			
 		case 0xFF1B:
