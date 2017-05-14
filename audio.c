@@ -252,8 +252,12 @@ void update_noise(void){
 	struct chan* c = chans + 3;
 	if(!c->powered) return;
 
-	float freq = 4194304.0f / (float)((int[]){ 8, 16, 32, 48, 64, 80, 96, 112 }[c->lfsr_div] << c->freq);
-	set_note_freq(c, c->freq < 14 ? freq : 0.0f);
+	float freq = 4194304.0f / (float)((size_t[]){ 8, 16, 32, 48, 64, 80, 96, 112 }[c->lfsr_div] << (size_t)c->freq);
+	set_note_freq(c, freq);
+
+	if(c->freq >= 14){
+		c->enabled = false;
+	}
 
 	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
