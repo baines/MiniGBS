@@ -29,7 +29,6 @@ static struct chan {
 	bool powered;
 	bool on_left;
 	bool on_right;
-	bool user_mute;
 
 	int volume;
 	int volume_init;
@@ -61,9 +60,12 @@ static struct chan {
 	uint8_t sample;
 } chans[4];
 
+static bool mute[4];
+
 #define FREQ 44100.0f
 
 float audio_rate;
+float audio_speed_modifier = 1.0f;
 
 static size_t nsamples;
 static float* samples;
@@ -88,7 +90,7 @@ void set_note_freq(struct chan* c, float freq){
 }
 
 bool chan_muted(struct chan* c){
-	return c->user_mute || !c->enabled || !(c->on_left || c->on_right) || !c->volume;
+	return mute[c-chans] || !c->enabled || !(c->on_left || c->on_right) || !c->volume;
 }
 
 void chan_enable(int i, bool enable){
@@ -192,7 +194,7 @@ void update_square(bool ch2){
 			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!c->user_mute){
+			if(!mute[c-chans]){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -239,7 +241,7 @@ void update_wave(void){
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
 				sample = hipass(c, (sample - diff) / 7.5f);
 
-				if(!c->user_mute){
+				if(!mute[c-chans]){
 					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 				}
@@ -283,7 +285,7 @@ void update_noise(void){
 			sample += ((pos - prev_pos) / c->freq_inc) * c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!c->user_mute){
+			if(!mute[c-chans]){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -292,8 +294,8 @@ void update_noise(void){
 }
 
 bool audio_mute(int chan, int val){
-	chans[chan-1].user_mute = (val != -1) ? val : !chans[chan-1].user_mute;
-	return chans[chan-1].user_mute;
+	mute[chan-1] = (val != -1) ? val : !mute[chan-1];
+	return mute[chan-1];
 }
 
 void audio_output(bool redraw){
@@ -389,6 +391,8 @@ void audio_update_rate(void){
 		audio_rate = rates[tac & 0x03] / (float)(256 - tma);
 		if(tac & 0x80) audio_rate *= 2.0f;
 	}
+
+	audio_rate *= audio_speed_modifier;
 
 	if(cfg.debug_mode){
 		printf("Audio rate changed: %.4f\n", audio_rate);

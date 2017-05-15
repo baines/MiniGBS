@@ -702,6 +702,12 @@ void ui_draw_regs(void){
 	}
 }
 
+void change_speed(float amt){
+	audio_speed_modifier = MAX(0.1f, MIN(2.0f, audio_speed_modifier + amt));
+	set_msg("Speed: %d%%\n", (int)roundf(100.0f * audio_speed_modifier));
+	audio_update_rate();
+}
+
 int main(int argc, char** argv){
 	setlocale(LC_ALL, "");
 	char* prog = argv[0];
@@ -1011,14 +1017,26 @@ restart:
 
 			case '=':
 			case '+':
-				cfg.volume = MIN(1.0f, cfg.volume + 0.1f);
+				cfg.volume = MIN(1.0f, cfg.volume + 0.05f);
 				set_msg("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
 				break;
 
 			case '-':
 			case '_':
-				cfg.volume = MAX(0.0f, cfg.volume - 0.1f);
+				cfg.volume = MAX(0.0f, cfg.volume - 0.05f);
 				set_msg("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
+				break;
+
+			case '[':
+				change_speed(-0.05);
+				break;
+
+			case ']':
+				change_speed(0.05);
+				break;
+
+			case KEY_BACKSPACE:
+				change_speed(1.0f - audio_speed_modifier);
 				break;
 
 			case 12: // CTRL-L
