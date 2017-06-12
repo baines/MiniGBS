@@ -56,7 +56,6 @@ static struct chan {
 	int      lfsr_div;
 
 	// wave
-	int sample_cursor;
 	uint8_t sample;
 } chans[4];
 
@@ -90,7 +89,7 @@ void set_note_freq(struct chan* c, float freq){
 }
 
 bool chan_muted(struct chan* c){
-	return mute[c-chans] || !c->enabled || !(c->on_left || c->on_right) || !c->volume;
+	return mute[c-chans] || !c->enabled || !c->powered || !(c->on_left || c->on_right) || !c->volume;
 }
 
 void chan_enable(int i, bool enable){
@@ -202,6 +201,16 @@ void update_square(bool ch2){
 	}
 }
 
+static uint8_t wave_sample(int pos, int volume){
+	uint8_t sample = mem[0xFF30 + pos / 2];
+	if(pos & 1){
+		sample &= 0xF;
+	} else {
+		sample >>= 4;
+	}
+	return volume ? (sample >> (volume-1)) : 0;
+}
+
 void update_wave(void){
 	struct chan* c = chans + 2;
 	if(!c->powered) return;
@@ -209,8 +218,7 @@ void update_wave(void){
 	float freq = 4194304.0f / (float)((2048 - c->freq) << 5);
 	set_note_freq(c, freq);
 
-	if(freq >= 131079) c->enabled = false;
-	else c->freq_inc *= 16.0f;
+	c->freq_inc *= 16.0f;
 
 	for(int i = 0; i < nsamples; i+=2){
 		update_len(c);
@@ -220,22 +228,15 @@ void update_wave(void){
 			float prev_pos = 0.0f;
 			float sample = 0.0f;
 
+			c->sample = wave_sample(c->val, c->volume);
+
 			while(update_freq(c, &pos)){
-				c->sample_cursor = c->val;
 				c->val = (c->val + 1) & 31;
-
-				c->sample = mem[0xFF30 + c->sample_cursor / 2];
-				if(c->sample_cursor & 1){
-					c->sample &= 0xF;
-				} else {
-					c->sample >>= 4;
-				}
-
-				c->sample = (c->volume) ? (c->sample >> (c->volume-1)) : 0;
-				sample += ((pos - prev_pos) / c->freq_inc) * c->sample;
+				sample += ((pos - prev_pos) / c->freq_inc) * (float)c->sample;
+				c->sample = wave_sample(c->val, c->volume);
 				prev_pos = pos;
 			}
-			sample += ((pos - prev_pos) / c->freq_inc) * c->sample;
+			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->sample;
 
 			if(c->volume > 0){
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
@@ -335,7 +336,7 @@ void audio_output(bool redraw){
 	if(cur_size > max_size){
 		usleep(((cur_size - max_size) / FREQ) * 1000000.0f);
 	}
-	
+
 	SDL_QueueAudio(audio, samples, nsamples * sizeof(float));
 }
 
@@ -376,7 +377,6 @@ void audio_init(void){
 
 	audio_update_rate();
 
-	SDL_QueueAudio(audio, samples, nsamples * sizeof(float));
 	SDL_PauseAudioDevice(audio, 0);
 }
 
