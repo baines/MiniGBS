@@ -148,15 +148,17 @@ void update_sweep(struct chan* c){
 
 	while(c->sweep.counter > 1.0f){
 		if(c->sweep.shift){
-			uint16_t inc = (c->sweep.freq >>= c->sweep.shift);
+			uint16_t inc = (c->sweep.freq >> c->sweep.shift);
 			if(!c->sweep.up) inc *= -1;
 
 			c->freq += inc;
-			c->sweep.freq = c->freq;
-
-			set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
-			c->freq_inc *= 8.0f;
-		} else {
+			if(c->freq > 2047){
+				c->enabled = 0;
+			} else {
+				set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
+				c->freq_inc *= 8.0f;
+			}
+		} else if(c->sweep.rate){
 			c->enabled = 0;
 		}
 		c->sweep.counter -= 1.0f;
@@ -432,8 +434,8 @@ void chan_trigger(int i){
 		c->sweep.rate    = (val >> 4) & 0x07;
 		c->sweep.up      = !(val & 0x08);
 		c->sweep.shift   = (val & 0x07);
-		c->sweep.inc     = c->sweep.rate ? (128.0f / (float)(c->sweep.rate + 1)) / FREQ : 0.0f;
-		c->sweep.counter = 0.0f;
+		c->sweep.inc     = c->sweep.rate ? (128.0f / (float)(c->sweep.rate)) / FREQ : 0;
+		c->sweep.counter = nexttowardf(1.0f, 1.1f);
 	}
 
 	int len_max = 64;
