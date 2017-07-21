@@ -330,7 +330,12 @@ void audio_output(bool redraw){
 	}
 
 	uint64_t cur_size = SDL_GetQueuedAudioSize(audio) / (2 * sizeof(float));
-	uint64_t max_size = FREQ / 8; // max 125ms buffer
+	uint64_t max_size = FREQ / 16; // max ~64ms buffer
+	uint64_t min_size = FREQ / 64; // min ~16ms buffer
+
+	if(SDL_GetAudioDeviceStatus(audio) == SDL_AUDIO_PAUSED && cur_size > min_size){
+		SDL_PauseAudioDevice(audio, 0);
+	}
 
 	if(cur_size > max_size){
 		usleep(((cur_size - max_size) / FREQ) * 1000000.0f);
@@ -347,6 +352,7 @@ void audio_reset(void){
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
 	SDL_ClearQueuedAudio(audio);
+	SDL_PauseAudioDevice(audio, 1);
 	chans[0].val = chans[1].val = -1;
 }
 
