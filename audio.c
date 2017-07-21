@@ -70,7 +70,7 @@ static size_t nsamples;
 static float* samples;
 
 static SDL_AudioDeviceID audio;
-static const int duty_lookup[] = { 1, 2, 4, 6 };
+static const int duty_lookup[] = { 0x10, 0x30, 0x3C, 0xCF };
 static float logbase;
 static float vol_l, vol_r;
 static const char* notes[] = {
@@ -186,10 +186,7 @@ void update_square(bool ch2){
 			while(update_freq(c, &pos)){
 				c->duty_counter = (c->duty_counter + 1) & 7;
 				sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
-
-				if(!c->duty_counter || c->duty_counter == c->duty){
-					c->val = ~(c->val-1);
-				}
+				c->val = (c->duty & (1 << c->duty_counter)) ? 1 : -1;
 				prev_pos = pos;
 			}
 			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
@@ -350,7 +347,7 @@ void audio_reset(void){
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
 	SDL_ClearQueuedAudio(audio);
-	chans[0].val = chans[1].val = 1;
+	chans[0].val = chans[1].val = -1;
 }
 
 void audio_init(void){
