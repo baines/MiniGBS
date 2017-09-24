@@ -15,18 +15,28 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 	backsp. Reset playback speed
 
 ## Recommended Listening:
-	Action Man - Search for Base X - *??? / Natsume* (favourite track: 19)
-	Asterix & Obelix - *Alberto Jose González*
-	Micro Machines V3 - *Thomas E. Petersen*
-	Mole Mania - *Taro Bando*
-	Ninja Gaiden Shadow - *Hiroyuki Iwatsuki?* (favourite track: 8)
-	Pokemon Crystal - *Junichi Masuda, Gō Ichinose* (favourite track: 17)
-	Pokemon Red - *Junichi Masuda*
-	Shantae - *Jake Kaufman*
-	Street Fighter II - *Yoko Shimomura, Isao Abe*
-	The Smurfs' Nightmare - *Alberto Jose González*
-	Turok: Battle of the Bionosaurs & Rage Wars - *Alberto Jose González*
-	Zelda Oracle of Ages/Seasons - *Kiyohiro Sada, Minako Adachi*
+
+| Game | Artist | Favourite track(s)* |
+| ---- | ------ | ------------------- |
+| Action Man - Search for Base X | ??? / Natsume | 19 (Moon base 1 boss) |
+| Asterix & Obelix | Alberto Jose González | |
+| Das Geheimnis der Happy Hippo-Insel | Stello Doussis | 0 (Title Screen) |
+| Micro Machines V3 | Thomas E. Petersen | 0 & 1 |
+| Mole Mania | Taro Bando | 15 (Forest Theme) |
+| Ninja Gaiden Shadow | Hiroyuki Iwatsuki? | 8 (Final Boss) |
+| Ottifanten Kommando Störtebeker | Stello Doussis | 4 (Der Zoo) |
+| Pokemon Crystal | Junichi Masuda, Gō Ichinose | 17 (Lucky Channel radio) |
+| Pokemon Red | Junichi Masuda | 22 (Trainer Battle) |
+| Radikal Bikers prototype | Alberto Jose González | 8 (Ingame 6) |
+| Shantae | Jake Kaufman | 9 (Boss) |
+| Spanky's Quest | Hiroyuki Iwatsuki | 8 (Ending Credits) |
+| Street Fighter II | Yoko Shimomura, Isao Abe | 8 (Ken's theme) |
+| The Smurfs' Nightmare | Alberto Jose González | 8 (Run!) |
+| Turok: Battle of the Bionosaurs | Alberto Jose González | 1 (Boss Fight) |
+| Turok: Rage Wars | Alberto Jose González | 4 (BGM #5) |
+| Zelda Oracle of Ages | Kiyohiro Sada, Minako Adachi | 33 (The Pirates Gigue) |
+	
+**Track numbers are zero-indexed and based on gbs from the "penultimate gbs archive" rar*
 
 ![Screenshot](/anim.gif)
 	
