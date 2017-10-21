@@ -29,6 +29,7 @@ static struct chan {
 	bool powered;
 	bool on_left;
 	bool on_right;
+	bool muted;
 
 	int volume;
 	int volume_init;
@@ -59,23 +60,17 @@ static struct chan {
 	uint8_t sample;
 } chans[4];
 
-static bool mute[4];
-
 #define FREQ 44100.0f
-
-float audio_rate;
-float audio_speed_modifier = 1.0f;
 
 static size_t nsamples;
 static float* samples;
+static float* sample_ptr;
 
 static SDL_AudioDeviceID audio;
 static const int duty_lookup[] = { 0x10, 0x30, 0x3C, 0xCF };
 static float logbase;
 static float vol_l, vol_r;
-static const char* notes[] = {
-	"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"
-};
+static float audio_rate;
 
 float hipass(struct chan* c, float sample){
 	float out = sample - c->capacitor;
@@ -89,7 +84,7 @@ void set_note_freq(struct chan* c, float freq){
 }
 
 bool chan_muted(struct chan* c){
-	return mute[c-chans] || !c->enabled || !c->powered || !(c->on_left || c->on_right) || !c->volume;
+	return c->muted || !c->enabled || !c->powered || !(c->on_left || c->on_right) || !c->volume;
 }
 
 void chan_enable(int i, bool enable){
@@ -192,7 +187,7 @@ void update_square(bool ch2){
 			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!mute[c-chans]){
+			if(!c->muted){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -241,7 +236,7 @@ void update_wave(void){
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
 				sample = hipass(c, (sample - diff) / 7.5f);
 
-				if(!mute[c-chans]){
+				if(!c->muted){
 					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 				}
@@ -285,7 +280,7 @@ void update_noise(void){
 			sample += ((pos - prev_pos) / c->freq_inc) * c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!mute[c-chans]){
+			if(!c->muted){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -294,11 +289,11 @@ void update_noise(void){
 }
 
 bool audio_mute(int chan, int val){
-	mute[chan-1] = (val != -1) ? val : !mute[chan-1];
-	return mute[chan-1];
+	chans[chan-1].muted = (val != -1) ? val : !chans[chan-1].muted;
+	return chans[chan-1].muted;
 }
 
-void audio_output(bool redraw){
+void audio_update(void){
 	memset(samples, 0, nsamples * sizeof(float));
 
 	update_square(0);
@@ -306,54 +301,62 @@ void audio_output(bool redraw){
 	update_wave();
 	update_noise();
 
-	// draw notes
-	if(redraw){
-		move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+9);
-		attron(A_BOLD);
-		for(int i = 0; i < 3; ++i){
-			if(!chan_muted(chans + i)){
-				printw("[ ");
-				attron(COLOR_PAIR(i+1));
-				int octave = MAX(0, MIN(chans[i].note / 12, 9));
-				printw("%s%d", notes[chans[i].note % 12], octave);
-				attroff(COLOR_PAIR(i+1));
-				printw(" ]     ");
-			} else {
-				printw("[     ]     ");
-			}
-		}
-		attroff(A_BOLD);
-	}
-
-	for(int i = 0; i < nsamples; ++i){
-		samples[i] *= cfg.volume;
-	}
-
-	uint64_t cur_size = SDL_GetQueuedAudioSize(audio) / (2 * sizeof(float));
-	uint64_t max_size = FREQ / 16; // max ~64ms buffer
-	uint64_t min_size = FREQ / 64; // min ~16ms buffer
-
-	if(SDL_GetAudioDeviceStatus(audio) == SDL_AUDIO_PAUSED && cur_size > min_size){
-		SDL_PauseAudioDevice(audio, 0);
-	}
-
-	if(cur_size > max_size){
-		usleep(((cur_size - max_size) / FREQ) * 1000000.0f);
-	}
-
-	SDL_QueueAudio(audio, samples, nsamples * sizeof(float));
+	sample_ptr = samples + nsamples;
 }
 
+// FIXME: this is icky
+volatile int is_resetting;
+
 void audio_pause(bool p){
+	is_resetting = 1;
+	eventfd_write(evfd_audio_ready, 1);
+	SDL_LockAudioDevice(audio);
+
+	is_resetting = 0;
 	SDL_PauseAudioDevice(audio, p);
+
+	SDL_UnlockAudioDevice(audio);
 }
 
 void audio_reset(void){
+	is_resetting = 1;
+	eventfd_write(evfd_audio_ready, 1);
+	SDL_LockAudioDevice(audio);
+	is_resetting = 0;
+
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
-	SDL_ClearQueuedAudio(audio);
-	SDL_PauseAudioDevice(audio, 1);
+	sample_ptr = samples;
 	chans[0].val = chans[1].val = -1;
+
+	SDL_UnlockAudioDevice(audio);
+}
+
+static void audio_callback(void* ptr, uint8_t* data, int len){
+	len >>= 2;
+
+	if(is_resetting)
+		return;
+
+	do {
+		if(sample_ptr - samples == 0){
+			uint64_t val = 1;
+
+			eventfd_write(evfd_audio_request, val);
+			TEMP_FAILURE_RETRY(eventfd_read(evfd_audio_ready, &val));
+
+			if(is_resetting)
+				return;
+		}
+
+		int n = MIN(len, sample_ptr - samples);
+		memcpy(data, samples, n * sizeof(float));
+		memmove(samples, samples + n, (nsamples - n) * sizeof(float));
+
+		data += (n*4);
+		sample_ptr -= n;
+		len -= n;
+	} while(len);
 }
 
 void audio_init(void){
@@ -368,6 +371,7 @@ void audio_init(void){
 		.channels = 2,
 		.samples  = 512,
 		.format   = AUDIO_F32SYS,
+		.callback = audio_callback,
 	};
 
 	SDL_AudioSpec got;
@@ -385,6 +389,16 @@ void audio_init(void){
 	SDL_PauseAudioDevice(audio, 0);
 }
 
+void audio_get_notes(uint16_t notes[static 3]){
+	for(int i = 0; i < 3; ++i){
+		if(chan_muted(chans + i)){
+			notes[i] = 0xffff;
+		} else {
+			notes[i] = chans[i].note;
+		}
+	}
+}
+
 void audio_update_rate(void){
 	audio_rate = 59.7f;
 
@@ -397,15 +411,16 @@ void audio_update_rate(void){
 		if(tac & 0x80) audio_rate *= 2.0f;
 	}
 
-	audio_rate *= audio_speed_modifier;
+	audio_rate *= cfg.speed;
 
 	if(cfg.debug_mode){
 		printf("Audio rate changed: %.4f\n", audio_rate);
 	}
 
 	free(samples);
-	nsamples = (int)(FREQ / audio_rate) * 2;
-	samples  = calloc(nsamples, sizeof(float));
+	nsamples  = (int)(FREQ / audio_rate) * 2;
+	samples   = calloc(nsamples, sizeof(float));
+	sample_ptr = samples;
 }
 
 void chan_trigger(int i){
@@ -459,6 +474,10 @@ void audio_write(uint16_t addr, uint8_t val){
 
 	if(cfg.debug_mode){
 		printf("Audio write: %4x <- %2x\n", addr, val);
+	}
+
+	if(!cfg.subdued && mem[addr] != val){
+		ui_regs_set(addr, audio_rate / 8);
 	}
 
 	int i = (addr - 0xFF10)/5;

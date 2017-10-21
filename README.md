@@ -10,6 +10,7 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 	space/↓ Pause/Resume
 	-/=     Volume down/up
 	1/2/3/4 Toggle channel
+	v       Toggle UI mode 
 	esc/q   Quit
 	[/]     Playback speed down/up
 	backsp. Reset playback speed
@@ -37,6 +38,8 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 | Zelda Oracle of Ages | Kiyohiro Sada, Minako Adachi | 33 (The Pirates Gigue) |
 	
 **Track numbers are zero-indexed and based on gbs from the "penultimate gbs archive" rar*
+
+Also the included gbs/pocket.gbs file, (soundtrack to [Is That a Demo In Your Pocket?](https://www.pouet.net/prod.php?which=65997))
 
 ![Screenshot](/anim.gif)
 	

@@ -1,8 +1,10 @@
-#include <sys/mman.h>
 #include <assert.h>
 #include <math.h>
 #include <locale.h>
 #include <time.h>
+#include <poll.h>
+#include <sys/mman.h>
+#include <sys/timerfd.h>
 #include "minigbs.h"
 
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
@@ -11,10 +13,10 @@
 
 struct Config cfg;
 uint8_t* mem;
+int evfd_audio_request;
+int evfd_audio_ready;
 
 static uint8_t* banks[32];
-static int next_counter;
-static int boldness[16*3];
 static struct GBSHeader h;
 
 void bank_switch(int which){
@@ -31,11 +33,7 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 	if(addr >= 0x2000 && addr < 0x4000){
 		bank_switch(val);
 	} else if(addr >= 0xFF10 && addr <= 0xFF40){
-		if(!cfg.subdued && mem[addr] != val){
-			boldness[addr - 0xFF10] = (int)audio_rate >> 3;
-		}
 		audio_write(addr, val);
-		next_counter = 0;
 	} else if(addr < 0x8000){
 		if(cfg.debug_mode){
 			printf("rom write?: [%4x] <- [%2x]\n", addr, val);
@@ -621,91 +619,25 @@ void usage(const char* argv0, FILE* out){
 			argv0);
 }
 
-static int msg_timer;
-static char msg[128];
-
-void set_msg(const char* fmt, ...){
-	va_list va;
-	va_start(va, fmt);
-
-	vsnprintf(msg, sizeof(msg), fmt, va);
-
-	msg_timer = 20;
-	va_end(va);
-}
-
 uint64_t get_time(void){
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (ts.tv_sec * 1000000UL) + (ts.tv_nsec / 1000UL);
 }
 
-void ui_draw_info(void){
-	char buf[256] = {};
-	int len = 0;
-
-	move(0, 0);
-	attron(A_BOLD);
-
-	len = snprintf(buf, countof(buf), "[%d/%d]", cfg.song_no, h.song_count - 1);
-	mvaddstr(0, cfg.win_w-len, buf);
-	len = 0;
-	*buf = 0;
-
-	if(*h.title && strncmp(h.title, "<?>", 4) != 0){
-		len += snprintf(buf + len, countof(buf) - len, "%.32s", h.title);
-	}
-	if(*h.copyright && strncmp(h.copyright, "<?>", 4) != 0){
-		len += snprintf(buf + len, countof(buf) - len, "  ©%.32s", h.copyright);
-	}
-	mvaddstr(1, (cfg.win_w-len)/2, buf);
-	*buf = 0;
-
-	if(*h.author && strncmp(h.author, "<?>", 4) != 0){
-		len = snprintf(buf, countof(buf), "by %.32s ", h.author);
-	}
-	mvaddstr(2, (cfg.win_w-len)/2, buf);
-}
-
-void ui_draw_regs(void){
-	static const int color_map[3][16] = {
-		{ 1, 1, 1, 1, 1, 5, 2, 2, 2, 2, 3, 3, 3, 3, 3, 5 },
-		{ 4, 4, 4, 4, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5 },
-		{ 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3 },
-	};
-
-	int x = (cfg.win_w-47)/2;
-	int y = (cfg.win_h-6)/6+4;
-
-	move(y, x);
-	attron(A_BOLD);
-	for(int i = 0; i < 0x10; ++i) printw("  %1X", i);
-	attroff(A_BOLD);
-
-	for(int i = 0; i < 3; ++i){
-		move(y+i+1, x-4);
-		attron(A_BOLD);
-		printw("FF%d ", i+1);
-		attroff(A_BOLD);
-		for(int j = 0; j < 0x10; ++j){
-			if(boldness[i*16+j]){
-				attron(A_BOLD);
-			}
-			attron(COLOR_PAIR(color_map[i][j]));
-			printw(" %02x", mem[0xFF10 + (i*0x10) + j]);
-			attroff(COLOR_PAIR(color_map[i][j]));
-			if(boldness[i*16+j]){
-				attroff(A_BOLD);
-				--boldness[i*16+j];
-			}
-		}
-	}
-}
-
 void change_speed(float amt){
-	audio_speed_modifier = MAX(0.1f, MIN(2.0f, audio_speed_modifier + amt));
-	set_msg("Speed: %d%%\n", (int)roundf(100.0f * audio_speed_modifier));
+	cfg.speed = MAX(0.1f, MIN(2.0f, cfg.speed + amt));
+	ui_msg_set("Speed: %d%%\n", (int)roundf(100.0f * cfg.speed));
 	audio_update_rate();
+}
+
+static void fd_clear(int fd){
+	uint64_t blah;
+	ssize_t ret;
+
+	do {
+		ret = read(fd, &blah, 8);
+	} while(ret == -1 && errno == EAGAIN);
 }
 
 int main(int argc, char** argv){
@@ -843,51 +775,33 @@ int main(int argc, char** argv){
 		0xac, 0xdd, 0xda, 0x48
 	};
 
-	if(!cfg.hide_ui){
-		initscr();
-		noecho();
-		cbreak();
-		timeout(0);
-		curs_set(0);
-		nodelay(stdscr, TRUE);
-		keypad(stdscr, TRUE);
-		set_escdelay(0);
-
-		if(!cfg.monochrome){
-			start_color();
-
-			if(can_change_color() && COLORS > 8){
-				init_color(COLOR_BLACK, 91, 91, 102);
-			}
-
-			init_pair(1, COLOR_CYAN   , COLOR_BLACK);
-			init_pair(2, COLOR_MAGENTA, COLOR_BLACK);
-			init_pair(3, COLOR_RED    , COLOR_BLACK);
-			init_pair(4, COLOR_YELLOW , COLOR_BLACK);
-			init_pair(5, COLOR_BLACK  , COLOR_BLACK);
-			init_pair(6, COLOR_GREEN  , COLOR_BLACK);
-			init_pair(7, COLOR_WHITE  , COLOR_BLACK);
-
-			bkgd(COLOR_PAIR(7));
-		}
-		
-		getmaxyx(stdscr, cfg.win_h, cfg.win_w);
-	}
+	ui_init();
 
 	mem[0xff06] = h.tma;
 	mem[0xff07] = h.tac;
 
 	cfg.volume = 1.0f;
+	cfg.speed  = 1.0f;
+
+	evfd_audio_request = eventfd(0, EFD_NONBLOCK);
+	evfd_audio_ready   = eventfd(0, EFD_SEMAPHORE);
+
+	struct pollfd fds[] = {
+		{ evfd_audio_request, POLLIN },
+		{ STDIN_FILENO      , POLLIN },
+	};
+
 	audio_init();
 
 	// hack to avoid ALSA warnings breaking the UI
 	fclose(stderr);
 
 	bool paused;
-restart:
 
+restart:
 	audio_reset();
 	clear();
+
 	if(banks[0]) memcpy(mem, banks[0], 0x4000);
 	if(banks[1]) memcpy(mem + 0x4000, banks[1], 0x4000);
 
@@ -912,146 +826,124 @@ restart:
 	paused = false;
 	audio_pause(false);
 
-	uint64_t prev_output_time = 0, prev_ui_time = 0;
-	bool redraw_note_freq = false;
-
 	while(1){
-
-		bool redraw_ui = !cfg.hide_ui && (get_time() - prev_ui_time) > 16667UL;
-		if(redraw_ui){
-			redraw_note_freq = true;
+		int n = poll(fds, countof(fds), -1);
+		if(n == -1){
+			perror("poll");
+			continue;
 		}
 
-		if(paused){
-			usleep(20000);
-		} else if(cpu_step() && regs.sp == h.sp){
-			regs.pc = h.play_addr;
-			regs.sp -= 2;
+		if(fds[0].revents & POLLIN){
+			fd_clear(evfd_audio_request);
 
-			if(next_counter > 90){
-				cfg.song_no = (cfg.song_no + 1) % h.song_count;
-				set_msg("Next\n");
-				goto restart;
+			while(regs.sp != h.sp){
+				cpu_step();
 			}
 
 			if(cfg.debug_mode){
 				puts("-------------------------");
 			}
 
-			audio_output(redraw_note_freq);
-			redraw_note_freq = false;
+			regs.pc = h.play_addr;
+			regs.sp -= 2;
 
-			if(!cfg.hide_ui){
-				ui_draw_info();
-				ui_draw_regs();
-				refresh();
-			}
+			audio_update();
+			ui_redraw(&h);
 
-			uint64_t diff = get_time() - prev_output_time;
-			int64_t slp = (1000000UL / audio_rate) - (diff + 1000);
-			if(slp > 5000) usleep(slp);
-			prev_output_time = get_time();
+			fds[0].revents = 0;
+			eventfd_write(evfd_audio_ready, 1);
 		}
 
-		if(!redraw_ui) continue;
-		prev_ui_time = get_time();
+		if(fds[1].revents & POLLIN){
 
-		if(msg_timer > 0){
-			int x, y;
-			getmaxyx(stdscr, y, x);
-			move(y-1, 0);
+			int key;
+			switch((key = getch())){
 
-			if(--msg_timer == 0){
-				clrtoeol();
-			} else {
-				if(msg_timer > 15) attron(A_BOLD);
-				printw("%s\n", msg);
-				if(msg_timer > 15) attroff(A_BOLD);
+				case 27: // Escape
+					if(getch() != -1) break;
+				case 'q':
+					goto end;
+
+				case '1':
+				case '2':
+				case '3':
+				case '4': {
+					bool muted = audio_mute(key - '0', -1);
+					ui_msg_set("Channel %c %smuted\n", key, muted ? "" : "un");
+				} break;
+
+				case 'n':
+				case KEY_RIGHT:
+					cfg.song_no = (cfg.song_no + 1) % h.song_count;
+					ui_msg_set("Next\n");
+					goto restart;
+
+				case 'p':
+				case KEY_LEFT:
+					cfg.song_no = (h.song_count + cfg.song_no - 1) % h.song_count;
+					ui_msg_set("Previous\n");
+					goto restart;
+
+				case 'r':
+				case KEY_UP:
+					ui_msg_set("Replay\n");
+					goto restart;
+
+				case 'v':
+					cfg.ui_mode ^= 1;
+					erase();
+					break;
+
+				case ' ':
+				case KEY_DOWN:
+					paused = !paused;
+					audio_pause(paused);
+					ui_msg_set("%s\n", paused ? "Paused" : "Resumed");
+					break;
+
+				case KEY_RESIZE:
+					getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+					clear();
+					break;
+
+				case '=':
+				case '+':
+					cfg.volume = MIN(1.0f, cfg.volume + 0.05f);
+					ui_msg_set("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
+					break;
+
+				case '-':
+				case '_':
+					cfg.volume = MAX(0.0f, cfg.volume - 0.05f);
+					ui_msg_set("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
+					break;
+
+				case '[':
+					change_speed(-0.05);
+					break;
+
+				case ']':
+					change_speed(0.05);
+					break;
+
+				case KEY_BACKSPACE:
+					change_speed(1.0f - cfg.speed);
+					break;
+
+				case 12: // CTRL-L
+					clear();
+					break;
+
+				default:
+					break;
 			}
-		}
 
-		int key;
-		switch((key = getch())){
-
-			case 27: // Escape
-				if(getch() != -1) break;
-			case 'q':
-				goto end;
-
-			case '1':
-			case '2':
-			case '3':
-			case '4': {
-				bool muted = audio_mute(key - '0', -1);
-				set_msg("Channel %c %smuted\n", key, muted ? "" : "un");
-			} break;
-
-			case 'n':
-			case KEY_RIGHT:
-				cfg.song_no = (cfg.song_no + 1) % h.song_count;
-				set_msg("Next\n");
-				goto restart;
-
-			case 'p':
-			case KEY_LEFT:
-				cfg.song_no = (h.song_count + cfg.song_no - 1) % h.song_count;
-				set_msg("Previous\n");
-				goto restart;
-
-			case 'r':
-			case KEY_UP:
-				set_msg("Replay\n");
-				goto restart;
-
-			case ' ':
-			case KEY_DOWN:
-				paused = !paused;
-				audio_pause(paused);
-				set_msg("%s\n", paused ? "Paused" : "Resumed");
-				break;
-
-			case KEY_RESIZE:
-				getmaxyx(stdscr, cfg.win_h, cfg.win_w);
-				clear();
-				break;
-
-			case '=':
-			case '+':
-				cfg.volume = MIN(1.0f, cfg.volume + 0.05f);
-				set_msg("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
-				break;
-
-			case '-':
-			case '_':
-				cfg.volume = MAX(0.0f, cfg.volume - 0.05f);
-				set_msg("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
-				break;
-
-			case '[':
-				change_speed(-0.05);
-				break;
-
-			case ']':
-				change_speed(0.05);
-				break;
-
-			case KEY_BACKSPACE:
-				change_speed(1.0f - audio_speed_modifier);
-				break;
-
-			case 12: // CTRL-L
-				clear();
-				break;
-
-			default:
-				break;
+			fds[1].revents = 0;
 		}
 	}
 
 end:
-	if(!cfg.hide_ui){
-		endwin();
-	}
+	ui_quit();
 
 	return 0;
 }

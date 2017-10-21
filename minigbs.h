@@ -2,18 +2,31 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <unistd.h>
 #include <ncurses.h>
+#include <sys/eventfd.h>
 
-void debug_dump(uint8_t* op);
+struct GBSHeader;
+struct Config;
 
-void audio_output(bool redraw);
-void audio_reset(void);
-void audio_init(void);
-void audio_write(uint16_t addr, uint8_t val);
-void audio_pause(bool);
-bool audio_mute(int chan, int val);
-void audio_update_rate();
+void debug_dump (uint8_t* op);
+
+void audio_init        (void);
+void audio_update      (void);
+void audio_reset       (void);
+void audio_write       (uint16_t addr, uint8_t val);
+void audio_pause       (bool);
+bool audio_mute        (int chan, int val);
+void audio_update_rate (void);
+void audio_get_notes   (uint16_t[static 3]);
+
+void ui_init      (void);
+void ui_msg_set   (const char* fmt, ...);
+void ui_regs_set  (uint16_t addr, int val);
+void ui_chart_set (uint16_t[static 3]);
+void ui_redraw    (struct GBSHeader*);
+void ui_quit      (void);
 
 struct GBSHeader {
 	char     id[3];
@@ -48,6 +61,11 @@ struct {
 	uint16_t sp, pc;
 } regs;
 
+enum UIMode {
+	UI_MODE_REGISTERS,
+	UI_MODE_CHART,
+};
+
 struct Config {
 	bool debug_mode;
 	bool monochrome;
@@ -55,15 +73,20 @@ struct Config {
 	bool subdued;
 
 	int song_no;
-	float volume;
+
+	float volume; // 0.0f - 1.0f
+	float speed;  // 0.0f - 1.0f
+
+	enum UIMode ui_mode;
 
 	int win_w, win_h;
 };
 
 extern struct Config cfg;
 extern uint8_t* mem;
-extern float audio_rate;
-extern float audio_speed_modifier;
+
+extern int evfd_audio_request;
+extern int evfd_audio_ready;
 
 #define MAX(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a >  _b ? _a : _b; })
 #define MIN(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a <= _b ? _a : _b; })
