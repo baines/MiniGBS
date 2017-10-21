@@ -301,6 +301,10 @@ void audio_update(void){
 	update_wave();
 	update_noise();
 
+	for(size_t i = 0; i < nsamples; ++i){
+		samples[i] *= cfg.volume;
+	}
+
 	sample_ptr = samples + nsamples;
 }
 
