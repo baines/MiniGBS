@@ -5,6 +5,8 @@
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/timerfd.h>
+#include <sys/signalfd.h>
+#include <signal.h>
 #include "minigbs.h"
 
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
@@ -786,9 +788,16 @@ int main(int argc, char** argv){
 	evfd_audio_request = eventfd(0, EFD_NONBLOCK);
 	evfd_audio_ready   = eventfd(0, EFD_SEMAPHORE);
 
+	sigset_t      sigmask;
+	sigemptyset (&sigmask);
+	sigaddset   (&sigmask, SIGWINCH);
+
+	int sigfd = signalfd(-1, &sigmask, 0);
+
 	struct pollfd fds[] = {
 		{ evfd_audio_request, POLLIN },
 		{ STDIN_FILENO      , POLLIN },
+		{ sigfd             , POLLIN },
 	};
 
 	audio_init();
@@ -939,6 +948,13 @@ restart:
 			}
 
 			fds[1].revents = 0;
+		}
+
+		if(fds[2].revents & POLLIN){
+			while(getch() != KEY_RESIZE);
+			getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+			clear();
+			fds[2].revents = 0;
 		}
 	}
 
