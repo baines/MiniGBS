@@ -19,7 +19,8 @@ void audio_write       (uint16_t addr, uint8_t val);
 void audio_pause       (bool);
 bool audio_mute        (int chan, int val);
 void audio_update_rate (void);
-void audio_get_notes   (uint16_t[static 3]);
+void audio_get_notes   (uint16_t[static 4]);
+void audio_get_vol     (uint8_t vol[static 8]);
 
 void ui_init      (void);
 void ui_msg_set   (const char* fmt, ...);
@@ -63,7 +64,10 @@ struct {
 
 enum UIMode {
 	UI_MODE_REGISTERS,
+	UI_MODE_VOLUME,
 	UI_MODE_CHART,
+
+	UI_MODE_COUNT,
 };
 
 struct Config {

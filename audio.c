@@ -393,14 +393,23 @@ void audio_init(void){
 	SDL_PauseAudioDevice(audio, 0);
 }
 
-void audio_get_notes(uint16_t notes[static 3]){
-	for(int i = 0; i < 3; ++i){
+void audio_get_notes(uint16_t notes[static 4]){
+	for(int i = 0; i < 4; ++i){
 		if(chan_muted(chans + i)){
 			notes[i] = 0xffff;
 		} else {
 			notes[i] = chans[i].note;
 		}
 	}
+}
+
+void audio_get_vol(uint8_t vol[static 8]){
+	for(int i = 0; i < 4; ++i){
+		vol[i*2+0] = chans[i].volume * chans[i].on_left;
+		vol[i*2+1] = chans[i].volume * chans[i].on_right;
+	}
+	if(vol[4]) vol[4] = chans[2].sample >> (vol[4]-1);
+	if(vol[5]) vol[5] = chans[2].sample >> (vol[5]-1);
 }
 
 void audio_update_rate(void){

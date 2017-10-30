@@ -10,7 +10,8 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 	space/↓ Pause/Resume
 	-/=     Volume down/up
 	1/2/3/4 Toggle channel
-	v       Toggle UI mode 
+	c       Toggle Chart/Register view
+	v       Toggle Note/Volume view
 	esc/q   Quit
 	[/]     Playback speed down/up
 	backsp. Reset playback speed

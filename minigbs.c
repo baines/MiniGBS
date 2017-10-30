@@ -898,8 +898,13 @@ restart:
 					ui_msg_set("Replay\n");
 					goto restart;
 
+				case 'c':
+					cfg.ui_mode = (cfg.ui_mode == UI_MODE_CHART) ? UI_MODE_VOLUME : UI_MODE_CHART;
+					erase();
+					break;
+
 				case 'v':
-					cfg.ui_mode ^= 1;
+					cfg.ui_mode = (cfg.ui_mode == UI_MODE_VOLUME) ? UI_MODE_REGISTERS : UI_MODE_VOLUME;
 					erase();
 					break;
 

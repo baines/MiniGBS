@@ -30,6 +30,7 @@ static void ui_chart_draw(void){
 	};
 
 	const int c = col - &grid[0];
+	const int start_x = MAX(0, (cfg.win_w - GRID_W)/2);
 
 	for(size_t x = 0; x < GRID_W; ++x){
 		for(size_t y = 0; y < GRID_H; y += 2){
@@ -50,7 +51,7 @@ static void ui_chart_draw(void){
 			}
 
 			attron(COLOR_PAIR(color));
-			mvprintw((GRID_H/2) - (y/2), 10 + (GRID_W - x), "%s", glyph);
+			mvprintw((GRID_H/2) - (y/2), start_x + (GRID_W - x), "%s", glyph);
 			attroff(COLOR_PAIR(color));
 		}
 	}
@@ -185,21 +186,98 @@ void ui_init(void){
 		init_pair(9 , COLOR_CYAN    , COLOR_RED);
 		init_pair(10, COLOR_MAGENTA , COLOR_RED);
 
+		init_pair(11, COLOR_BLACK, COLOR_CYAN);
+		init_pair(12, COLOR_BLACK, COLOR_MAGENTA);
+		init_pair(13, COLOR_BLACK, COLOR_RED);
+		init_pair(14, COLOR_BLACK, COLOR_YELLOW);
+
 		bkgd(COLOR_PAIR(7));
 	}
 
 	getmaxyx(stdscr, cfg.win_h, cfg.win_w);
 }
 
-void ui_redraw(struct GBSHeader* h){
-	if(cfg.hide_ui) return;
-
-	uint16_t notes[3];
-	audio_get_notes(notes);
-	ui_chart_set(notes);
+static void ui_notes_draw(uint16_t notes[static 4]){
 	static const char* note_strs[] = {
 		"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"
 	};
+
+	move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+9);
+	attron(A_BOLD);
+
+	for(int i = 0; i < 3; ++i){
+		if(notes[i] != 0xffff){
+			printw("[ ");
+			attron(COLOR_PAIR(i+1));
+			int octave = MAX(0, MIN(notes[i] / 12, 9));
+			printw("%s%d", note_strs[notes[i] % 12], octave);
+			attroff(COLOR_PAIR(i+1));
+			printw(" ]     ");
+		} else {
+			printw("[     ]     ");
+		}
+	}
+	attroff(A_BOLD);
+}
+
+static void ui_volume_draw(uint16_t notes[static 4]){
+	static const char* vol_glyphs[] = {
+		" ", "▎", "▌", "▊", "█",
+	};
+
+	static uint8_t prev_vol[8];
+	uint8_t vol[8];
+	audio_get_vol(vol);
+
+	for(int i = 0; i < 8; ++i){
+		if(notes[i/2] == 0xffff) vol[i] = 0;
+		if(!prev_vol[i]) continue;
+
+		vol[i] = MAX(prev_vol[i] - 1, vol[i]);
+	}
+
+	for(int i = 0; i < 4; ++i){
+		move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+3+(12*i));
+
+		attron(COLOR_PAIR(i+11));
+		for(int j = 3; j --> 0 ;) {
+			uint8_t v = vol[i*2+0] / 5;
+			if(v == j){
+				printw("%s", vol_glyphs[4-(vol[i*2+0] % 5)]);
+			} else if(v > j){
+				printw("%s", vol_glyphs[0]);
+			} else {
+				printw("%s", vol_glyphs[4]);
+			}
+		}
+		attroff(COLOR_PAIR(i+11));
+
+		attron(COLOR_PAIR(i+1));
+		if(vol[i*2+0] || vol[i*2+1]) printw("█");
+
+		for(int j = 0; j < 3; ++j){
+			uint8_t v = vol[i*2+1] / 5;
+			if(v == j){
+				printw("%s", vol_glyphs[vol[i*2+1] % 5]);
+			} else if(v > j){
+				printw("%s", vol_glyphs[4]);
+			} else {
+				printw("%s", vol_glyphs[0]);
+			}
+		}
+
+		attroff(COLOR_PAIR(i+1));
+	}
+
+	memcpy(prev_vol, vol, sizeof(vol));
+}
+
+void ui_redraw(struct GBSHeader* h){
+	if(cfg.hide_ui) return;
+
+	uint16_t notes[4] = {};
+	audio_get_notes(notes);
+	ui_chart_set(notes);
 
 	if(cfg.ui_mode == UI_MODE_CHART){
 		ui_chart_draw();
@@ -207,21 +285,11 @@ void ui_redraw(struct GBSHeader* h){
 		ui_info_draw(h);
 		ui_regs_draw();
 
-		move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+9);
-		attron(A_BOLD);
-		for(int i = 0; i < 3; ++i){
-			if(notes[i] != 0xffff){
-				printw("[ ");
-				attron(COLOR_PAIR(i+1));
-				int octave = MAX(0, MIN(notes[i] / 12, 9));
-				printw("%s%d", note_strs[notes[i] % 12], octave);
-				attroff(COLOR_PAIR(i+1));
-				printw(" ]     ");
-			} else {
-				printw("[     ]     ");
-			}
+		if(cfg.ui_mode == UI_MODE_REGISTERS){
+			ui_notes_draw(notes);
+		} else {
+			ui_volume_draw(notes);
 		}
-		attroff(A_BOLD);
 	}
 
 	ui_msg_draw();
