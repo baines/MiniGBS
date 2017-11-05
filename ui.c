@@ -291,6 +291,10 @@ void ui_redraw(struct GBSHeader* h){
 			ui_volume_draw(notes);
 		}
 	}
+}
+
+void ui_refresh(void){
+	if(cfg.hide_ui) return;
 
 	ui_msg_draw();
 	refresh();

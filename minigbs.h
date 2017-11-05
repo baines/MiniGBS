@@ -13,6 +13,7 @@ struct Config;
 void debug_dump (uint8_t* op);
 
 void audio_init        (void);
+void audio_quit        (void);
 void audio_update      (void);
 void audio_reset       (void);
 void audio_write       (uint16_t addr, uint8_t val);
@@ -27,6 +28,7 @@ void ui_msg_set   (const char* fmt, ...);
 void ui_regs_set  (uint16_t addr, int val);
 void ui_chart_set (uint16_t[static 3]);
 void ui_redraw    (struct GBSHeader*);
+void ui_refresh   (void);
 void ui_quit      (void);
 
 struct GBSHeader {

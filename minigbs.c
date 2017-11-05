@@ -794,10 +794,18 @@ int main(int argc, char** argv){
 
 	int sigfd = signalfd(-1, &sigmask, 0);
 
+	int draw_timer = timerfd_create(CLOCK_MONOTONIC, 0);
+	struct itimerspec ts = {
+		.it_value.tv_nsec = 1,
+		.it_interval.tv_nsec = UINT64_C(1000000000) / UINT64_C(60),
+	};
+	timerfd_settime(draw_timer, 0, &ts, NULL);
+
 	struct pollfd fds[] = {
 		{ evfd_audio_request, POLLIN },
 		{ STDIN_FILENO      , POLLIN },
 		{ sigfd             , POLLIN },
+		{ draw_timer        , POLLIN },
 	};
 
 	audio_init();
@@ -899,12 +907,12 @@ restart:
 					goto restart;
 
 				case 'c':
-					cfg.ui_mode = (cfg.ui_mode == UI_MODE_CHART) ? UI_MODE_VOLUME : UI_MODE_CHART;
+					cfg.ui_mode = (cfg.ui_mode != UI_MODE_CHART) ? UI_MODE_CHART : UI_MODE_REGISTERS;
 					erase();
 					break;
 
 				case 'v':
-					cfg.ui_mode = (cfg.ui_mode == UI_MODE_VOLUME) ? UI_MODE_REGISTERS : UI_MODE_VOLUME;
+					cfg.ui_mode = (cfg.ui_mode != UI_MODE_VOLUME) ? UI_MODE_VOLUME : UI_MODE_REGISTERS;
 					erase();
 					break;
 
@@ -961,10 +969,20 @@ restart:
 			clear();
 			fds[2].revents = 0;
 		}
+
+		if(fds[3].revents & POLLIN){
+			fd_clear(draw_timer);
+			ui_refresh();
+			fds[3].revents = 0;
+		}
 	}
 
 end:
 	ui_quit();
+	audio_quit();
+
+	close(evfd_audio_ready);
+	close(evfd_audio_request);
 
 	return 0;
 }

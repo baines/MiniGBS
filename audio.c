@@ -1,5 +1,7 @@
-#include <SDL2/SDL.h>
 #include "minigbs.h"
+#define MAL_IMPLEMENTATION
+#include "mini_al.h"
+#include <math.h>
 
 struct chan_len_ctr {
 	int   load;
@@ -16,7 +18,7 @@ struct chan_vol_env {
 };
 
 struct chan_freq_sweep {
-	int   freq;
+	uint16_t freq;
 	int   rate;
 	bool  up;
 	int   shift;
@@ -29,7 +31,6 @@ static struct chan {
 	bool powered;
 	bool on_left;
 	bool on_right;
-	bool muted;
 
 	int volume;
 	int volume_init;
@@ -66,11 +67,15 @@ static size_t nsamples;
 static float* samples;
 static float* sample_ptr;
 
-static SDL_AudioDeviceID audio;
+static mal_context audio_ctx;
+static mal_device audio;
+static mal_mutex audio_lock;
+
 static const int duty_lookup[] = { 0x10, 0x30, 0x3C, 0xCF };
 static float logbase;
 static float vol_l, vol_r;
 static float audio_rate;
+static bool  muted[4]; // not in chan struct to avoid memset(0) across tacks
 
 float hipass(struct chan* c, float sample){
 	float out = sample - c->capacitor;
@@ -84,7 +89,7 @@ void set_note_freq(struct chan* c, float freq){
 }
 
 bool chan_muted(struct chan* c){
-	return c->muted || !c->enabled || !c->powered || !(c->on_left || c->on_right) || !c->volume;
+	return muted[c-chans] || !c->enabled || !c->powered || !(c->on_left || c->on_right) || !c->volume;
 }
 
 void chan_enable(int i, bool enable){
@@ -146,11 +151,12 @@ void update_sweep(struct chan* c){
 			uint16_t inc = (c->sweep.freq >> c->sweep.shift);
 			if(!c->sweep.up) inc *= -1;
 
-			c->freq += inc;
+			c->freq = c->sweep.freq + inc;
 			if(c->freq > 2047){
 				c->enabled = 0;
 			} else {
 				set_note_freq(c, 4194304.0f / (float)((2048 - c->freq) << 5));
+				c->sweep.freq = c->freq;
 				c->freq_inc *= 8.0f;
 			}
 		} else if(c->sweep.rate){
@@ -187,7 +193,7 @@ void update_square(bool ch2){
 			sample += ((pos - prev_pos) / c->freq_inc) * (float)c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!c->muted){
+			if(!muted[c-chans]){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -236,7 +242,7 @@ void update_wave(void){
 				float diff = (float[]){ 7.5f, 3.75f, 1.5f }[c->volume - 1];
 				sample = hipass(c, (sample - diff) / 7.5f);
 
-				if(!c->muted){
+				if(!muted[c-chans]){
 					samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 					samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 				}
@@ -280,7 +286,7 @@ void update_noise(void){
 			sample += ((pos - prev_pos) / c->freq_inc) * c->val;
 			sample = hipass(c, sample * (c->volume / 15.0f));
 
-			if(!c->muted){
+			if(!muted[c-chans]){
 				samples[i+0] += sample * 0.25f * c->on_left * vol_l;
 				samples[i+1] += sample * 0.25f * c->on_right * vol_r;
 			}
@@ -289,8 +295,8 @@ void update_noise(void){
 }
 
 bool audio_mute(int chan, int val){
-	chans[chan-1].muted = (val != -1) ? val : !chans[chan-1].muted;
-	return chans[chan-1].muted;
+	muted[chan-1] = (val != -1) ? val : !muted[chan-1];
+	return muted[chan-1];
 }
 
 void audio_update(void){
@@ -308,39 +314,35 @@ void audio_update(void){
 	sample_ptr = samples + nsamples;
 }
 
-// FIXME: this is icky
-volatile int is_resetting;
+volatile int audio_active;
 
 void audio_pause(bool p){
-	is_resetting = 1;
+	audio_active = !p;
 	eventfd_write(evfd_audio_ready, 1);
-	SDL_LockAudioDevice(audio);
-
-	is_resetting = 0;
-	SDL_PauseAudioDevice(audio, p);
-
-	SDL_UnlockAudioDevice(audio);
 }
 
 void audio_reset(void){
-	is_resetting = 1;
-	eventfd_write(evfd_audio_ready, 1);
-	SDL_LockAudioDevice(audio);
-	is_resetting = 0;
+	audio_pause(true);
+	mal_mutex_lock(&audio_ctx, &audio_lock);
 
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
 	sample_ptr = samples;
 	chans[0].val = chans[1].val = -1;
 
-	SDL_UnlockAudioDevice(audio);
+	mal_mutex_unlock(&audio_ctx, &audio_lock);
+	audio_pause(false);
 }
 
-static void audio_callback(void* ptr, uint8_t* data, int len){
-	len >>= 2;
+static uint32_t audio_callback(mal_device* ptr, uint32_t len, void* data){
+	uint32_t orig_len = len;
+	uint32_t ret = 0;
+	len *= 2;
 
-	if(is_resetting)
-		return;
+	mal_mutex_lock(&audio_ctx, &audio_lock);
+
+	if(!audio_active)
+		goto out;
 
 	do {
 		if(sample_ptr - samples == 0){
@@ -349,8 +351,8 @@ static void audio_callback(void* ptr, uint8_t* data, int len){
 			eventfd_write(evfd_audio_request, val);
 			TEMP_FAILURE_RETRY(eventfd_read(evfd_audio_ready, &val));
 
-			if(is_resetting)
-				return;
+			if(!audio_active)
+				goto out;
 		}
 
 		int n = MIN(len, sample_ptr - samples);
@@ -361,36 +363,40 @@ static void audio_callback(void* ptr, uint8_t* data, int len){
 		sample_ptr -= n;
 		len -= n;
 	} while(len);
+
+	ret = orig_len;
+
+out:
+	mal_mutex_unlock(&audio_ctx, &audio_lock);
+	return ret;
 }
 
 void audio_init(void){
 
-	if(SDL_Init(SDL_INIT_AUDIO) != 0){
-		fprintf(stderr, "Error calling SDL_Init: %s\n", SDL_GetError());
+	if(mal_context_init(NULL, 0, NULL, &audio_ctx) != MAL_SUCCESS){
+		fprintf(stderr, "mal_context_init failed.\n");
 		exit(1);
 	}
 
-	SDL_AudioSpec want = {
-		.freq     = FREQ,
-		.channels = 2,
-		.samples  = 512,
-		.format   = AUDIO_F32SYS,
-		.callback = audio_callback,
-	};
-
-	SDL_AudioSpec got;
-	if((audio = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0)) == 0){
-		printf("OpenAudio failed: %s.\n", SDL_GetError());
+	mal_device_config cfg = mal_device_config_init_playback(mal_format_f32, 2, FREQ, &audio_callback);
+	if(mal_device_init(&audio_ctx, mal_device_type_playback, NULL, &cfg, NULL, &audio) != MAL_SUCCESS){
+		fprintf(stderr, "mal_device_init failed.\n");
 		exit(1);
-	} else if(cfg.debug_mode){
-		printf("Got audio: freq=%d, samples=%d, format=%d.\n", got.freq, got.samples, got.format);
+	}
+
+	if(mal_mutex_create(&audio_ctx, &audio_lock) == MAL_FALSE){
+		fprintf(stderr, "mal_mutex_create failed.\n");
+		exit(1);
 	}
 
 	logbase = log(1.059463094f);
 
+	mal_device_start(&audio);
 	audio_update_rate();
+	audio_pause(false);
+}
 
-	SDL_PauseAudioDevice(audio, 0);
+void audio_quit(void){
 }
 
 void audio_get_notes(uint16_t notes[static 4]){
@@ -408,8 +414,18 @@ void audio_get_vol(uint8_t vol[static 8]){
 		vol[i*2+0] = chans[i].volume * chans[i].on_left;
 		vol[i*2+1] = chans[i].volume * chans[i].on_right;
 	}
-	if(vol[4]) vol[4] = chans[2].sample >> (vol[4]-1);
-	if(vol[5]) vol[5] = chans[2].sample >> (vol[5]-1);
+
+	int ch3_hi = 0, ch3_lo = 0xf;
+	for(uint8_t* p = mem + 0xFF30; p < mem + 0xFF40; ++p){
+		uint8_t a = *p >> 4, b = *p & 0xF;
+		ch3_lo = MIN(ch3_lo, MIN(a, b));
+		ch3_hi = MAX(ch3_hi, MAX(a, b));
+	}
+
+	float ch3_v = (ch3_hi - ch3_lo) / 15.0f;
+
+	if(vol[4]) vol[4] = 5*(4-vol[4]) * ch3_v;
+	if(vol[5]) vol[5] = 5*(4-vol[5]) * ch3_v;
 }
 
 void audio_update_rate(void){
@@ -430,10 +446,16 @@ void audio_update_rate(void){
 		printf("Audio rate changed: %.4f\n", audio_rate);
 	}
 
+	audio_pause(true);
+	mal_mutex_lock(&audio_ctx, &audio_lock);
+
 	free(samples);
 	nsamples  = (int)(FREQ / audio_rate) * 2;
 	samples   = calloc(nsamples, sizeof(float));
 	sample_ptr = samples;
+
+	mal_mutex_unlock(&audio_ctx, &audio_lock);
+	audio_pause(false);
 }
 
 void chan_trigger(int i){
