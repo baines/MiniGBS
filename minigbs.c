@@ -811,7 +811,9 @@ int main(int argc, char** argv){
 	audio_init();
 
 	// hack to avoid ALSA warnings breaking the UI
-	fclose(stderr);
+	if(!cfg.hide_ui){
+		fclose(stderr);
+	}
 
 	bool paused;
 
