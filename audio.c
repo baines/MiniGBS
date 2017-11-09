@@ -61,7 +61,7 @@ static struct chan {
 	uint8_t sample;
 } chans[4];
 
-#define FREQ 44100.0f
+#define FREQ 48000.0f
 
 static size_t nsamples;
 static float* samples;
@@ -73,13 +73,14 @@ static mal_mutex audio_lock;
 
 static const int duty_lookup[] = { 0x10, 0x30, 0x3C, 0xCF };
 static float logbase;
+static float charge_factor;
 static float vol_l, vol_r;
 static float audio_rate;
 static bool  muted[4]; // not in chan struct to avoid memset(0) across tacks
 
 float hipass(struct chan* c, float sample){
 	float out = sample - c->capacitor;
-	c->capacitor = sample - out * 0.996;
+	c->capacitor = sample - out * charge_factor;
 	return out;
 }
 
@@ -390,6 +391,7 @@ void audio_init(void){
 	}
 
 	logbase = log(1.059463094f);
+	charge_factor = pow(0.999958, 4194304.0 / FREQ);
 
 	mal_device_start(&audio);
 	audio_update_rate();
