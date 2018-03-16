@@ -9,12 +9,15 @@
 
 struct GBSHeader;
 struct Config;
+struct pollfd;
+
+void cpu_frame (void);
 
 void debug_dump (uint8_t* op);
 
-void audio_init        (void);
+int  audio_init        (struct pollfd**, int);
 void audio_quit        (void);
-void audio_update      (void);
+void audio_update      (struct pollfd*, int);
 void audio_reset       (void);
 void audio_write       (uint16_t addr, uint8_t val);
 void audio_pause       (bool);
@@ -23,6 +26,7 @@ void audio_update_rate (void);
 void audio_get_notes   (uint16_t[static 4]);
 void audio_get_vol     (uint8_t vol[static 8]);
 
+
 void ui_init      (void);
 void ui_msg_set   (const char* fmt, ...);
 void ui_regs_set  (uint16_t addr, int val);
@@ -30,6 +34,10 @@ void ui_chart_set (uint16_t[static 3]);
 void ui_redraw    (struct GBSHeader*);
 void ui_refresh   (void);
 void ui_quit      (void);
+void ui_reset     (void);
+int  ui_cmd       (int key);
+
+extern bool ui_in_cmd_mode;
 
 struct GBSHeader {
 	char     id[3];

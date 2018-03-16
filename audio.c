@@ -1,6 +1,5 @@
 #include "minigbs.h"
-#define MAL_IMPLEMENTATION
-#include "mini_al.h"
+#include <alsa/asoundlib.h>
 #include <math.h>
 
 struct chan_len_ctr {
@@ -66,17 +65,19 @@ static struct chan {
 static size_t nsamples;
 static float* samples;
 static float* sample_ptr;
-
-static mal_context audio_ctx;
-static mal_device audio;
-static mal_mutex audio_lock;
+static float* sample_end;
 
 static const int duty_lookup[] = { 0x10, 0x30, 0x3C, 0xCF };
 static float logbase;
 static float charge_factor;
 static float vol_l, vol_r;
 static float audio_rate;
-static bool  muted[4]; // not in chan struct to avoid memset(0) across tacks
+static bool  muted[4]; // not in chan struct to avoid memset(0) across tracks
+static bool paused;
+
+static snd_pcm_t* pcm;
+static snd_pcm_uframes_t pcm_buffer_size;
+static snd_pcm_uframes_t pcm_period_size;
 
 float hipass(struct chan* c, float sample){
 	float out = sample - c->capacitor;
@@ -300,105 +301,91 @@ bool audio_mute(int chan, int val){
 	return muted[chan-1];
 }
 
-void audio_update(void){
-	memset(samples, 0, nsamples * sizeof(float));
-
-	update_square(0);
-	update_square(1);
-	update_wave();
-	update_noise();
-
-	for(size_t i = 0; i < nsamples; ++i){
-		samples[i] *= cfg.volume;
-	}
-
-	sample_ptr = samples + nsamples;
-}
-
-volatile int audio_active;
-
-void audio_pause(bool p){
-	audio_active = !p;
-	eventfd_write(evfd_audio_ready, 1);
-}
-
 void audio_reset(void){
-	audio_pause(true);
-	mal_mutex_lock(&audio_ctx, &audio_lock);
-
 	memset(chans, 0, sizeof(chans));
 	memset(samples, 0, nsamples * sizeof(float));
 	sample_ptr = samples;
+	sample_end = samples + nsamples;
 	chans[0].val = chans[1].val = -1;
-
-	mal_mutex_unlock(&audio_ctx, &audio_lock);
-	audio_pause(false);
 }
 
-static uint32_t audio_callback(mal_device* ptr, uint32_t len, void* data){
-	uint32_t orig_len = len;
-	uint32_t ret = 0;
-	len *= 2;
-
-	mal_mutex_lock(&audio_ctx, &audio_lock);
-
-	if(!audio_active)
-		goto out;
-
-	do {
-		if(sample_ptr - samples == 0){
-			uint64_t val = 1;
-
-			eventfd_write(evfd_audio_request, val);
-			TEMP_FAILURE_RETRY(eventfd_read(evfd_audio_ready, &val));
-
-			if(!audio_active)
-				goto out;
-		}
-
-		int n = MIN(len, sample_ptr - samples);
-		memcpy(data, samples, n * sizeof(float));
-		memmove(samples, samples + n, (nsamples - n) * sizeof(float));
-
-		data += (n*4);
-		sample_ptr -= n;
-		len -= n;
-	} while(len);
-
-	ret = orig_len;
-
-out:
-	mal_mutex_unlock(&audio_ctx, &audio_lock);
-	return ret;
+void audio_pause(bool p){
+	paused = p;
 }
 
-void audio_init(void){
-
-	if(mal_context_init(NULL, 0, NULL, &audio_ctx) != MAL_SUCCESS){
-		fprintf(stderr, "mal_context_init failed.\n");
-		exit(1);
-	}
-
-	mal_device_config cfg = mal_device_config_init_playback(mal_format_f32, 2, FREQ, &audio_callback);
-	if(mal_device_init(&audio_ctx, mal_device_type_playback, NULL, &cfg, NULL, &audio) != MAL_SUCCESS){
-		fprintf(stderr, "mal_device_init failed.\n");
-		exit(1);
-	}
-
-	if(mal_mutex_create(&audio_ctx, &audio_lock) == MAL_FALSE){
-		fprintf(stderr, "mal_mutex_create failed.\n");
-		exit(1);
-	}
+int audio_init(struct pollfd** fds, int nfds){
+	snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
+	snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT, SND_PCM_ACCESS_RW_INTERLEAVED, 2, FREQ, 1, 16667);
+	snd_pcm_get_params(pcm, &pcm_buffer_size, &pcm_period_size);
 
 	logbase = log(1.059463094f);
 	charge_factor = pow(0.999958, 4194304.0 / FREQ);
 
-	mal_device_start(&audio);
 	audio_update_rate();
-	audio_pause(false);
+
+	int count = snd_pcm_poll_descriptors_count(pcm);
+	*fds = realloc(*fds, (nfds + count) * sizeof(struct pollfd));
+	snd_pcm_poll_descriptors(pcm, (*fds) + nfds, count);
+
+	return nfds + count;
 }
 
-void audio_quit(void){
+void audio_quit(){
+	snd_pcm_close(pcm);
+}
+
+void audio_update(struct pollfd* fds, int nfds){
+	static float* buf = NULL;
+	const size_t bufsz = (pcm_period_size*2) * sizeof(float);
+
+	if(!buf){
+		buf = malloc(bufsz);
+	}
+
+	float* p = buf;
+	float* end = buf + (bufsz/sizeof(float));
+
+	uint16_t ev;
+	snd_pcm_poll_descriptors_revents(pcm, fds, nfds, &ev);
+
+	if(!(ev & POLLOUT)){
+		return;
+	}
+
+	if(paused){
+		memset(buf, 0, bufsz);
+		goto out;
+	}
+
+	while(end - p){
+		if(sample_ptr == sample_end){
+			cpu_frame();
+
+			memset(samples, 0, nsamples * sizeof(float));
+
+			update_square(0);
+			update_square(1);
+			update_wave();
+			update_noise();
+
+			for(size_t i = 0; i < nsamples; ++i){
+				samples[i] *= cfg.volume;
+			}
+
+			sample_ptr = samples;
+		}
+
+		int n = MIN(end - p, sample_end - sample_ptr);
+		memcpy(p, sample_ptr, n * sizeof(float));
+		sample_ptr += n;
+		p += n;
+	}
+
+out:;
+    int err = snd_pcm_writei(pcm, buf, pcm_period_size);
+    if(err < 0){
+	    snd_pcm_recover(pcm, err, 1);
+    }
 }
 
 void audio_get_notes(uint16_t notes[static 4]){
@@ -448,16 +435,20 @@ void audio_update_rate(void){
 		printf("Audio rate changed: %.4f\n", audio_rate);
 	}
 
-	audio_pause(true);
-	mal_mutex_lock(&audio_ctx, &audio_lock);
+	size_t new_nsamples = (int)(FREQ / audio_rate) * 2;
+	float* new_samples = calloc(new_nsamples, sizeof(float));
+
+	if(samples){
+		memcpy(new_samples, samples, MIN(nsamples, new_nsamples));
+	}
 
 	free(samples);
-	nsamples  = (int)(FREQ / audio_rate) * 2;
-	samples   = calloc(nsamples, sizeof(float));
-	sample_ptr = samples;
+	samples    = new_samples;
+	nsamples   = new_nsamples;
 
-	mal_mutex_unlock(&audio_ctx, &audio_lock);
-	audio_pause(false);
+	// TODO: these should really be adjusted more accurately to not lose samples on speed change
+	sample_ptr = samples;
+	sample_end = samples + nsamples;
 }
 
 void chan_trigger(int i){

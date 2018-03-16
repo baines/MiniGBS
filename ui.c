@@ -3,11 +3,15 @@
 #define GRID_W 60
 #define GRID_H 60
 
+bool ui_in_cmd_mode;
+
 static uint8_t grid[GRID_W][GRID_H];
 static uint8_t (*col)[GRID_H] = &grid[0];
 static int boldness[16*3];
 static int msg_timer;
 static char msg[128];
+static char input[32];
+static char* input_ptr = input;
 
 void ui_chart_set(uint16_t notes[static 3]){
 	if(++col >= &grid[0] + GRID_W){
@@ -69,9 +73,7 @@ void ui_msg_set(const char* fmt, ...){
 
 static void ui_msg_draw(void){
 	if(msg_timer > 0){
-		int x, y;
-		getmaxyx(stdscr, y, x);
-		move(y-1, 0);
+		move(cfg.win_h-1, 0);
 
 		if(--msg_timer == 0){
 			clrtoeol();
@@ -80,6 +82,12 @@ static void ui_msg_draw(void){
 			printw("%s\n", msg);
 			if(msg_timer > 15) attroff(A_BOLD);
 		}
+	} else if(ui_in_cmd_mode) {
+		move(cfg.win_h-1, 0);
+		clrtoeol();
+		attron(A_BOLD);
+		printw("Goto track: %s", input);
+		attroff(A_BOLD);
 	}
 }
 
@@ -303,4 +311,45 @@ void ui_refresh(void){
 void ui_quit(void){
 	if(cfg.hide_ui) return;
 	endwin();
+}
+
+void ui_reset(void){
+	ui_in_cmd_mode = false;
+	clear();
+}
+
+int ui_cmd(int key){
+	int result = -1;
+
+	if(cfg.hide_ui)
+		return result;
+
+	// it feels wrong to switch again here, the whole key handling should maybe be moved here.
+	switch(key){
+		case '\n': {
+			if(ui_in_cmd_mode && *input){
+				result = atoi(input);
+			}
+			input_ptr = input;
+			*input = 0;
+			ui_in_cmd_mode = !ui_in_cmd_mode;
+			move(cfg.win_h-1, 0);
+			clrtoeol();
+		} break;
+
+		case KEY_BACKSPACE: {
+			if(input_ptr != input){
+				*--input_ptr = 0;
+			}
+		} break;
+
+		default: {
+			if(input_ptr - input < sizeof(input)){
+				*input_ptr++ = key;
+				*input_ptr = 0;
+			}
+		} break;
+	}
+
+	return result;
 }

@@ -7,6 +7,7 @@
 #include <sys/timerfd.h>
 #include <sys/signalfd.h>
 #include <signal.h>
+#include <wordexp.h>
 #include "minigbs.h"
 
 #if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
@@ -15,8 +16,6 @@
 
 struct Config cfg;
 uint8_t* mem;
-int evfd_audio_request;
-int evfd_audio_ready;
 
 static uint8_t* banks[32];
 static struct GBSHeader h;
@@ -610,7 +609,22 @@ end:;
 	return is_ret;
 }
 
-void usage(const char* argv0, FILE* out){
+void cpu_frame(void){
+	while(regs.sp != h.sp){
+		cpu_step();
+	}
+
+	if(cfg.debug_mode){
+		puts("-------------------------");
+	}
+
+	regs.pc = h.play_addr;
+	regs.sp -= 2;
+
+	ui_redraw(&h);
+}
+
+static void usage(const char* argv0, FILE* out){
 	fprintf(out,
 	        "Usage: %s [-dhmqs] file [song index]\n\n"
 			"  -h, Output this info to stdout.\n\n"
@@ -621,13 +635,13 @@ void usage(const char* argv0, FILE* out){
 			argv0);
 }
 
-uint64_t get_time(void){
+static uint64_t get_time(void){
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return (ts.tv_sec * 1000000UL) + (ts.tv_nsec / 1000UL);
 }
 
-void change_speed(float amt){
+static void change_speed(float amt){
 	cfg.speed = MAX(0.1f, MIN(2.0f, cfg.speed + amt));
 	ui_msg_set("Speed: %d%%\n", (int)roundf(100.0f * cfg.speed));
 	audio_update_rate();
@@ -640,6 +654,42 @@ static void fd_clear(int fd){
 	do {
 		ret = read(fd, &blah, 8);
 	} while(ret == -1 && errno == EAGAIN);
+}
+
+static FILE* config_open(const char* mode){
+	const int flags = WRDE_NOCMD | WRDE_UNDEF | WRDE_APPEND;
+	wordexp_t w = {};
+
+	wordexp("$XDG_CONFIG_DIR/minigbsrc", &w, flags);
+	wordexp("~/.config/minigbsrc"      , &w, flags);
+
+	FILE* config = w.we_wordc > 0 ? fopen(w.we_wordv[0], mode) : NULL;
+	wordfree(&w);
+	return config;
+}
+
+static void config_read(void){
+	FILE* f = config_open("r");
+	if(!f) return;
+
+	char cmd[16], rest[32];
+	while(fscanf(f, "%15s %31[^\n]", cmd, rest) == 2){
+		if(strcmp(cmd, "volume") == 0){
+			int v = MAX(0, MIN(100, atoi(rest)));
+			cfg.volume = v / 100.0f;
+			if(v != 100){
+				ui_msg_set("Volume: %d%%\n", v);
+			}
+		}
+	}
+	fclose(f);
+}
+
+static void config_write(void){
+	FILE* f = config_open("w");
+	if(!f) return;
+	fprintf(f, "volume %d\n", (int)roundf(cfg.volume * 100.0f));
+	fclose(f);
 }
 
 int main(int argc, char** argv){
@@ -785,8 +835,7 @@ int main(int argc, char** argv){
 	cfg.volume = 1.0f;
 	cfg.speed  = 1.0f;
 
-	evfd_audio_request = eventfd(0, EFD_NONBLOCK);
-	evfd_audio_ready   = eventfd(0, EFD_SEMAPHORE);
+	config_read();
 
 	sigset_t      sigmask;
 	sigemptyset (&sigmask);
@@ -801,14 +850,17 @@ int main(int argc, char** argv){
 	};
 	timerfd_settime(draw_timer, 0, &ts, NULL);
 
-	struct pollfd fds[] = {
-		{ evfd_audio_request, POLLIN },
-		{ STDIN_FILENO      , POLLIN },
-		{ sigfd             , POLLIN },
-		{ draw_timer        , POLLIN },
-	};
+	struct pollfd* fds = calloc(3, sizeof(struct pollfd));
+	{
+		struct pollfd tmp[] = {
+			{ STDIN_FILENO , POLLIN },
+			{ sigfd        , POLLIN },
+			{ draw_timer   , POLLIN },
+		};
+		memcpy(fds, tmp, sizeof(tmp));
+	}
 
-	audio_init();
+	int nfds = audio_init(&fds, 3);
 
 	// hack to avoid ALSA warnings breaking the UI
 	if(!cfg.hide_ui){
@@ -819,7 +871,7 @@ int main(int argc, char** argv){
 
 restart:
 	audio_reset();
-	clear();
+	ui_reset();
 
 	if(banks[0]) memcpy(mem, banks[0], 0x4000);
 	if(banks[1]) memcpy(mem + 0x4000, banks[1], 0x4000);
@@ -846,49 +898,40 @@ restart:
 	audio_pause(false);
 
 	while(1){
-		int n = poll(fds, countof(fds), -1);
+		int n = poll(fds, nfds, -1);
 		if(n == -1){
 			perror("poll");
 			continue;
 		}
 
+		audio_update(fds + 3, nfds - 3);
+
 		if(fds[0].revents & POLLIN){
-			fd_clear(evfd_audio_request);
-
-			while(regs.sp != h.sp){
-				cpu_step();
-			}
-
-			if(cfg.debug_mode){
-				puts("-------------------------");
-			}
-
-			regs.pc = h.play_addr;
-			regs.sp -= 2;
-
-			audio_update();
-			ui_redraw(&h);
-
-			fds[0].revents = 0;
-			eventfd_write(evfd_audio_ready, 1);
-		}
-
-		if(fds[1].revents & POLLIN){
 
 			int key;
 			switch((key = getch())){
 
 				case 27: // Escape
 					if(getch() != -1) break;
-				case 'q':
-					goto end;
+				case 'q': {
+					if(ui_in_cmd_mode){
+						ui_cmd('\n');
+					} else {
+						goto end;
+					}
+				} break;
 
-				case '1':
-				case '2':
-				case '3':
-				case '4': {
-					bool muted = audio_mute(key - '0', -1);
-					ui_msg_set("Channel %c %smuted\n", key, muted ? "" : "un");
+				case '1' ... '4': {
+					if(!ui_in_cmd_mode){
+						bool muted = audio_mute(key - '0', -1);
+						ui_msg_set("Channel %c %smuted\n", key, muted ? "" : "un");
+					}
+				} // fall-through
+				case '0':
+				case '5' ... '9': {
+					if(ui_in_cmd_mode){
+						ui_cmd(key);
+					}
 				} break;
 
 				case 'n':
@@ -950,9 +993,23 @@ restart:
 					change_speed(0.05);
 					break;
 
-				case KEY_BACKSPACE:
-					change_speed(1.0f - cfg.speed);
-					break;
+				case KEY_BACKSPACE: {
+					if(ui_in_cmd_mode){
+						ui_cmd(key);
+					} else {
+						change_speed(1.0f - cfg.speed);
+					}
+				} break;
+
+				case '\n': {
+					int track = ui_cmd(key);
+					if(track >= 0 && track < h.song_count){
+						cfg.song_no = track;
+						goto restart;
+					} else if(track > h.song_count){
+						ui_msg_set("Out of range");
+					}
+				} break;
 
 				case 12: // CTRL-L
 					clear();
@@ -965,26 +1022,24 @@ restart:
 			fds[1].revents = 0;
 		}
 
-		if(fds[2].revents & POLLIN){
+		if(fds[1].revents & POLLIN){
 			while(getch() != KEY_RESIZE);
 			getmaxyx(stdscr, cfg.win_h, cfg.win_w);
 			clear();
-			fds[2].revents = 0;
+			fds[1].revents = 0;
 		}
 
-		if(fds[3].revents & POLLIN){
+		if(fds[2].revents & POLLIN){
 			fd_clear(draw_timer);
 			ui_refresh();
-			fds[3].revents = 0;
+			fds[2].revents = 0;
 		}
 	}
 
 end:
+	config_write();
 	ui_quit();
 	audio_quit();
-
-	close(evfd_audio_ready);
-	close(evfd_audio_request);
 
 	return 0;
 }
