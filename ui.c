@@ -1,9 +1,23 @@
 #include "minigbs.h"
+#include <limits.h>
+#include <float.h>
+#include <assert.h>
+#include <math.h>
+
+int  x11_init       (void);
+int  x11_action     (bool*);
+void x11_draw_begin (void);
+void x11_draw_lines (int16_t* points, size_t);
+void x11_draw_end   (void);
+void x11_toggle     (void);
 
 #define GRID_W 60
 #define GRID_H 60
 
 bool ui_in_cmd_mode;
+
+#define OSC_SAMPLES 1600
+#define OSC_W 854
 
 static uint8_t grid[GRID_W][GRID_H];
 static uint8_t (*col)[GRID_H] = &grid[0];
@@ -163,8 +177,9 @@ static void ui_regs_draw(void){
 	}
 }
 
-void ui_init(void){
-	if(cfg.hide_ui) return;
+int ui_init(void){
+	if(cfg.hide_ui)
+		return -1;
 
 	initscr();
 	noecho();
@@ -203,6 +218,8 @@ void ui_init(void){
 	}
 
 	getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+
+	return x11_init();
 }
 
 static void ui_notes_draw(uint16_t notes[static 4]){
@@ -280,6 +297,64 @@ static void ui_volume_draw(uint16_t notes[static 4]){
 	memcpy(prev_vol, vol, sizeof(vol));
 }
 
+static struct osc_chan {
+	float samples[OSC_SAMPLES];
+} osc_chans[4];
+
+static ssize_t osc_find_transition(float* start, float* end){
+	float* p = start+1;
+	float* candidates[8];
+	float** c = candidates;
+
+	do {
+		for(; p < end-1; ++p){
+			if(*p > 0.01f){
+				break;
+			}
+		}
+
+		for(; p < end-1; ++p){
+			if(*p < -0.01f){
+				*c++ = p;
+				break;
+			}
+		}
+	} while(p < end-1 && c - candidates < countof(candidates));
+
+	ssize_t off = -1;
+	float max = FLT_MAX;
+	for(float** f = candidates; f < c; ++f){
+		float v = (*f)[0];
+		if(v < max){
+			max = v;
+			off = *f - start;
+		}
+	}
+
+	return off;
+}
+
+void ui_osc_draw(int chan, float* samples, size_t count){
+	struct osc_chan* c = osc_chans + chan;
+	const float height = 120.0f;
+	const float y_mid = (height/2.0f) + (height*(float)chan);
+
+	count /= 2;
+
+	if(count > OSC_SAMPLES){
+		samples += 2 * (count - OSC_SAMPLES);
+		count = OSC_SAMPLES;
+	}
+
+	size_t copy_count = OSC_SAMPLES - count;
+	memmove(c->samples, c->samples + count, copy_count * sizeof(float));
+
+	for(size_t i = 0; i < count; ++i){
+		float s = ((samples[i*2] + samples[i*2+1]) / 2.0f);// * 1.2f * height;
+		c->samples[copy_count + i] = s;
+	}
+}
+
 void ui_redraw(struct GBSHeader* h){
 	if(cfg.hide_ui) return;
 
@@ -302,6 +377,35 @@ void ui_redraw(struct GBSHeader* h){
 }
 
 void ui_refresh(void){
+	struct point {
+		int16_t x, y;
+	} points[OSC_W];
+
+	for(size_t i = 0; i < OSC_W; ++i){
+		points[i].x = i;
+	}
+
+	const int off_start = OSC_W / 2;
+	const int off_end   = OSC_SAMPLES - off_start;
+	const int height    = 120;
+
+	x11_draw_begin();
+
+	for(size_t i = 0; i < 4; ++i){
+		struct osc_chan* c = osc_chans + i;
+
+		const float y_mid = height / 2 + height * i;
+		const ssize_t off = i == 3 ? OSC_SAMPLES - OSC_W : osc_find_transition(c->samples + off_start, c->samples + off_end);
+
+		if(off != -1){
+			for(size_t j = 0; j < OSC_W; ++j){
+				points[j].y = y_mid + c->samples[j+off] * height;
+			}
+			x11_draw_lines((int16_t*)&points, OSC_W*2);
+		}
+	}
+
+	x11_draw_end();
 	if(cfg.hide_ui) return;
 
 	ui_msg_draw();
@@ -324,7 +428,6 @@ int ui_cmd(int key){
 	if(cfg.hide_ui)
 		return result;
 
-	// it feels wrong to switch again here, the whole key handling should maybe be moved here.
 	switch(key){
 		case '\n': {
 			if(ui_in_cmd_mode && *input){
@@ -352,4 +455,128 @@ int ui_cmd(int key){
 	}
 
 	return result;
+}
+
+int ui_action(int* out_val, bool* tui_events, bool* x11_events){
+	int key = -1;
+
+	if(*x11_events){
+		key = x11_action(x11_events);
+	}
+
+	if(key == -1 && *tui_events){
+		key = getch();
+		if(key == -1){
+			*tui_events = false;
+			return -1;
+		}
+	}
+
+	// TODO: more consistency here w.r.t ui messages being done here or at callsite etc.
+
+	switch(key){
+		case 27: // Escape
+			if(getch() != -1) break;
+		case 'q': {
+			if(ui_in_cmd_mode){
+				ui_cmd('\n');
+			} else {
+				return ACT_QUIT;
+			}
+		} break;
+
+		case '1' ... '4': {
+			if(!ui_in_cmd_mode){
+				*out_val = key - '0';
+				return ACT_CHAN_TOGGLE;
+			}
+		} // fall-through
+		case '0':
+		case '5' ... '9': {
+			if(ui_in_cmd_mode){
+				ui_cmd(key);
+			}
+		} break;
+
+		case 'n':
+		case KEY_RIGHT:
+			*out_val = (cfg.song_no + 1) % cfg.song_count;
+			ui_msg_set("Next\n");
+			return ACT_TRACK_SET;
+
+		case 'p':
+		case KEY_LEFT:
+			*out_val = (cfg.song_no + cfg.song_count - 1) % cfg.song_count;
+			ui_msg_set("Previous\n");
+			return ACT_TRACK_SET;
+
+		case 'r':
+		case KEY_UP:
+			*out_val = cfg.song_no;
+			ui_msg_set("Replay\n");
+			return ACT_TRACK_SET;
+
+		case 'c':
+			cfg.ui_mode = (cfg.ui_mode != UI_MODE_CHART) ? UI_MODE_CHART : UI_MODE_REGISTERS;
+			erase();
+			break;
+
+		case 'v':
+			cfg.ui_mode = (cfg.ui_mode != UI_MODE_VOLUME) ? UI_MODE_VOLUME : UI_MODE_REGISTERS;
+			erase();
+			break;
+
+		case ' ':
+		case KEY_DOWN:
+			return ACT_PAUSE;
+
+		case '=':
+		case '+': {
+			float vol = MIN(1.0f, cfg.volume + 0.05f);
+			*out_val = (int)roundf(100.0f * vol);
+			return ACT_VOL;
+		} break;
+
+		case '-':
+		case '_': {
+			float vol = MAX(0.0f, cfg.volume - 0.05f);
+			*out_val = (int)roundf(100.0f * vol);
+			return ACT_VOL;
+		} break;
+
+		case '[':
+			*out_val = -5;
+			return ACT_SPEED;
+
+		case ']':
+			*out_val = 5;
+			return ACT_SPEED;
+
+		case KEY_BACKSPACE: {
+			if(ui_in_cmd_mode){
+				ui_cmd(key);
+			} else {
+				*out_val = 0;
+				return ACT_SPEED;
+			}
+		} break;
+
+		case '\n': {
+			int track = ui_cmd(key);
+			if(track != -1){
+				*out_val = track;
+				return ACT_TRACK_SET;
+			}
+		} break;
+
+		case 'o': {
+			x11_toggle();
+		} break;
+
+		case 12: // CTRL-L
+			clear();
+			break;
+	}
+
+	return -1;
 }

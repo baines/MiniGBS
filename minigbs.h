@@ -26,8 +26,7 @@ void audio_update_rate (void);
 void audio_get_notes   (uint16_t[static 4]);
 void audio_get_vol     (uint8_t vol[static 8]);
 
-
-void ui_init      (void);
+int  ui_init      (void);
 void ui_msg_set   (const char* fmt, ...);
 void ui_regs_set  (uint16_t addr, int val);
 void ui_chart_set (uint16_t[static 3]);
@@ -36,6 +35,8 @@ void ui_refresh   (void);
 void ui_quit      (void);
 void ui_reset     (void);
 int  ui_cmd       (int key);
+void ui_osc_draw  (int chan, float* samples, size_t n);
+int  ui_action    (int* val, bool* tui, bool* x11);
 
 extern bool ui_in_cmd_mode;
 
@@ -80,6 +81,15 @@ enum UIMode {
 	UI_MODE_COUNT,
 };
 
+enum UIAction {
+	ACT_QUIT,
+	ACT_CHAN_TOGGLE,
+	ACT_TRACK_SET,
+	ACT_PAUSE,
+	ACT_VOL,
+	ACT_SPEED,
+};
+
 struct Config {
 	bool debug_mode;
 	bool monochrome;
@@ -87,6 +97,7 @@ struct Config {
 	bool subdued;
 
 	int song_no;
+	int song_count;
 
 	float volume; // 0.0f - 1.0f
 	float speed;  // 0.0f - 1.0f

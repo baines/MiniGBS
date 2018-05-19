@@ -40,8 +40,10 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 			printf("rom write?: [%4x] <- [%2x]\n", addr, val);
 		}
 	} else if(addr == 0xFF06 || addr == 0xFF07){
-		mem[addr] = val;
-		audio_update_rate();
+		if(mem[addr] != val){
+			mem[addr] = val;
+			audio_update_rate();
+		}
 	} else {
 		if(cfg.debug_mode){
 			switch(addr){
@@ -641,12 +643,6 @@ static uint64_t get_time(void){
 	return (ts.tv_sec * 1000000UL) + (ts.tv_nsec / 1000UL);
 }
 
-static void change_speed(float amt){
-	cfg.speed = MAX(0.1f, MIN(2.0f, cfg.speed + amt));
-	ui_msg_set("Speed: %d%%\n", (int)roundf(100.0f * cfg.speed));
-	audio_update_rate();
-}
-
 static void fd_clear(int fd){
 	uint64_t blah;
 	ssize_t ret;
@@ -749,7 +745,9 @@ int main(int argc, char** argv){
 		return 1;
 	}
 
+	cfg.song_count = h.song_count;
 	cfg.song_no = argc > 2 ? atoi(argv[2]) : MAX(0, h.start_song - 1);
+
 	if(cfg.song_no >= h.song_count){
 		fprintf(stderr, "The file says it has %d tracks, index %d is out of range.\n", h.song_count, cfg.song_no);
 		return 1;
@@ -827,8 +825,6 @@ int main(int argc, char** argv){
 		0xac, 0xdd, 0xda, 0x48
 	};
 
-	ui_init();
-
 	mem[0xff06] = h.tma;
 	mem[0xff07] = h.tac;
 
@@ -850,17 +846,26 @@ int main(int argc, char** argv){
 	};
 	timerfd_settime(draw_timer, 0, &ts, NULL);
 
-	struct pollfd* fds = calloc(3, sizeof(struct pollfd));
+	enum {
+		FD_STDIN,
+		FD_SIGNAL,
+		FD_DRAW_TIMER,
+		FD_GUI,
+	};
+
+#define NFDS 4
+	struct pollfd* fds = calloc(NFDS, sizeof(struct pollfd));
 	{
-		struct pollfd tmp[] = {
-			{ STDIN_FILENO , POLLIN },
-			{ sigfd        , POLLIN },
-			{ draw_timer   , POLLIN },
+		struct pollfd tmp[NFDS] = {
+			[FD_STDIN]      = { STDIN_FILENO , POLLIN },
+			[FD_SIGNAL]     = { sigfd        , POLLIN },
+			[FD_DRAW_TIMER] = { draw_timer   , POLLIN },
+			[FD_GUI]        = { ui_init()    , POLLIN },
 		};
 		memcpy(fds, tmp, sizeof(tmp));
 	}
 
-	int nfds = audio_init(&fds, 3);
+	int nfds = audio_init(&fds, NFDS);
 
 	// hack to avoid ALSA warnings breaking the UI
 	if(!cfg.hide_ui){
@@ -904,135 +909,61 @@ restart:
 			continue;
 		}
 
-		audio_update(fds + 3, nfds - 3);
+		audio_update(fds + NFDS, nfds - NFDS);
 
-		if(fds[0].revents & POLLIN){
-
-			int key;
-			switch((key = getch())){
-
-				case 27: // Escape
-					if(getch() != -1) break;
-				case 'q': {
-					if(ui_in_cmd_mode){
-						ui_cmd('\n');
-					} else {
-						goto end;
-					}
-				} break;
-
-				case '1' ... '4': {
-					if(!ui_in_cmd_mode){
-						bool muted = audio_mute(key - '0', -1);
-						ui_msg_set("Channel %c %smuted\n", key, muted ? "" : "un");
-					}
-				} // fall-through
-				case '0':
-				case '5' ... '9': {
-					if(ui_in_cmd_mode){
-						ui_cmd(key);
-					}
-				} break;
-
-				case 'n':
-				case KEY_RIGHT:
-					cfg.song_no = (cfg.song_no + 1) % h.song_count;
-					ui_msg_set("Next\n");
-					goto restart;
-
-				case 'p':
-				case KEY_LEFT:
-					cfg.song_no = (h.song_count + cfg.song_no - 1) % h.song_count;
-					ui_msg_set("Previous\n");
-					goto restart;
-
-				case 'r':
-				case KEY_UP:
-					ui_msg_set("Replay\n");
-					goto restart;
-
-				case 'c':
-					cfg.ui_mode = (cfg.ui_mode != UI_MODE_CHART) ? UI_MODE_CHART : UI_MODE_REGISTERS;
-					erase();
-					break;
-
-				case 'v':
-					cfg.ui_mode = (cfg.ui_mode != UI_MODE_VOLUME) ? UI_MODE_VOLUME : UI_MODE_REGISTERS;
-					erase();
-					break;
-
-				case ' ':
-				case KEY_DOWN:
-					paused = !paused;
-					audio_pause(paused);
-					ui_msg_set("%s\n", paused ? "Paused" : "Resumed");
-					break;
-
-				case KEY_RESIZE:
-					getmaxyx(stdscr, cfg.win_h, cfg.win_w);
-					clear();
-					break;
-
-				case '=':
-				case '+':
-					cfg.volume = MIN(1.0f, cfg.volume + 0.05f);
-					ui_msg_set("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
-					break;
-
-				case '-':
-				case '_':
-					cfg.volume = MAX(0.0f, cfg.volume - 0.05f);
-					ui_msg_set("Volume: %d%%\n", (int)roundf(100.0f * cfg.volume));
-					break;
-
-				case '[':
-					change_speed(-0.05);
-					break;
-
-				case ']':
-					change_speed(0.05);
-					break;
-
-				case KEY_BACKSPACE: {
-					if(ui_in_cmd_mode){
-						ui_cmd(key);
-					} else {
-						change_speed(1.0f - cfg.speed);
-					}
-				} break;
-
-				case '\n': {
-					int track = ui_cmd(key);
-					if(track >= 0 && track < h.song_count){
-						cfg.song_no = track;
-						goto restart;
-					} else if(track > h.song_count){
-						ui_msg_set("Out of range");
-					}
-				} break;
-
-				case 12: // CTRL-L
-					clear();
-					break;
-
-				default:
-					break;
-			}
-
-			fds[1].revents = 0;
-		}
-
-		if(fds[1].revents & POLLIN){
-			while(getch() != KEY_RESIZE);
-			getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+		if(fds[FD_SIGNAL].revents & POLLIN){
+			endwin();
+			refresh();
 			clear();
-			fds[1].revents = 0;
+			getmaxyx(stdscr, cfg.win_h, cfg.win_w);
 		}
 
-		if(fds[2].revents & POLLIN){
+		if(fds[FD_DRAW_TIMER].revents & POLLIN){
 			fd_clear(draw_timer);
 			ui_refresh();
-			fds[2].revents = 0;
+		}
+
+		bool tui_events = fds[FD_STDIN].revents & POLLIN;
+		bool gui_events = fds[FD_GUI].revents & POLLIN;
+
+		while(tui_events || gui_events){
+			int value;
+			switch(ui_action(&value, &tui_events, &gui_events)){
+				case ACT_QUIT:
+					goto end;
+
+				case ACT_CHAN_TOGGLE:
+					ui_msg_set("Channel %c %smuted\n",
+					           value + '0',
+					           audio_mute(value, -1) ? "" : "un");
+					break;
+
+				case ACT_TRACK_SET:
+					if(value < 0 || value >= cfg.song_count){
+						ui_msg_set("Out of range.\n");
+					} else {
+						cfg.song_no = value;
+						goto restart;
+					}
+					break;
+
+				case ACT_PAUSE:
+					paused = !paused;
+					ui_msg_set("%s\n", paused ? "Paused" : "Resumed");
+					audio_pause(paused);
+					break;
+
+				case ACT_VOL:
+					cfg.volume = value / 100.0f;
+					ui_msg_set("Volume: %d%%\n", value);
+					break;
+
+				case ACT_SPEED:
+					cfg.speed = value ? MAX(0.1f, MIN(2.0f, cfg.speed + value / 100.0f)) : 1.0f;
+					ui_msg_set("Speed: %d%%\n", (int)roundf(100.0f * cfg.speed));
+					audio_update_rate();
+					break;
+			}
 		}
 	}
 

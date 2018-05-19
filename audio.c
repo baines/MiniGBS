@@ -2,6 +2,12 @@
 #include <alsa/asoundlib.h>
 #include <math.h>
 
+#if 0
+#define dbg_printf printf
+#else
+#define dbg_printf(...)
+#endif
+
 struct chan_len_ctr {
 	int   load;
 	bool  enabled;
@@ -64,6 +70,7 @@ static struct chan {
 
 static size_t nsamples;
 static float* samples;
+static float* samples_tmp;
 static float* sample_ptr;
 static float* sample_end;
 
@@ -80,9 +87,13 @@ static snd_pcm_uframes_t pcm_buffer_size;
 static snd_pcm_uframes_t pcm_period_size;
 
 float hipass(struct chan* c, float sample){
+#if 1
 	float out = sample - c->capacitor;
 	c->capacitor = sample - out * charge_factor;
 	return out;
+#else
+	return sample;
+#endif
 }
 
 void set_note_freq(struct chan* c, float freq){
@@ -313,27 +324,6 @@ void audio_pause(bool p){
 	paused = p;
 }
 
-int audio_init(struct pollfd** fds, int nfds){
-	snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
-	snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT, SND_PCM_ACCESS_RW_INTERLEAVED, 2, FREQ, 1, 16667);
-	snd_pcm_get_params(pcm, &pcm_buffer_size, &pcm_period_size);
-
-	logbase = log(1.059463094f);
-	charge_factor = pow(0.999958, 4194304.0 / FREQ);
-
-	audio_update_rate();
-
-	int count = snd_pcm_poll_descriptors_count(pcm);
-	*fds = realloc(*fds, (nfds + count) * sizeof(struct pollfd));
-	snd_pcm_poll_descriptors(pcm, (*fds) + nfds, count);
-
-	return nfds + count;
-}
-
-void audio_quit(){
-	snd_pcm_close(pcm);
-}
-
 void audio_update(struct pollfd* fds, int nfds){
 	static float* buf = NULL;
 	const size_t bufsz = (pcm_period_size*2) * sizeof(float);
@@ -361,12 +351,31 @@ void audio_update(struct pollfd* fds, int nfds){
 		if(sample_ptr == sample_end){
 			cpu_frame();
 
-			memset(samples, 0, nsamples * sizeof(float));
+			memset(samples    , 0, nsamples * sizeof(float));
+			memset(samples_tmp, 0, nsamples * sizeof(float));
 
 			update_square(0);
+			ui_osc_draw(0, samples, nsamples);
+
+			for(size_t i = 0; i < nsamples; ++i) samples_tmp[i] += samples[i];
+			memset(samples, 0, nsamples * sizeof(float));
+
 			update_square(1);
+			ui_osc_draw(1, samples, nsamples);
+
+			for(size_t i = 0; i < nsamples; ++i) samples_tmp[i] += samples[i];
+			memset(samples, 0, nsamples * sizeof(float));
+
 			update_wave();
+			ui_osc_draw(2, samples, nsamples);
+
+			for(size_t i = 0; i < nsamples; ++i) samples_tmp[i] += samples[i];
+			memset(samples, 0, nsamples * sizeof(float));
+
 			update_noise();
+			ui_osc_draw(3, samples, nsamples);
+
+			for(size_t i = 0; i < nsamples; ++i) samples[i] += samples_tmp[i];
 
 			for(size_t i = 0; i < nsamples; ++i){
 				samples[i] *= cfg.volume;
@@ -386,6 +395,27 @@ out:;
     if(err < 0){
 	    snd_pcm_recover(pcm, err, 1);
     }
+}
+
+int audio_init(struct pollfd** fds, int nfds){
+	snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
+	snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT, SND_PCM_ACCESS_RW_INTERLEAVED, 2, FREQ, 1, 16667);
+	snd_pcm_get_params(pcm, &pcm_buffer_size, &pcm_period_size);
+
+	logbase = log(1.059463094f);
+	charge_factor = pow(0.999958, 4194304.0 / FREQ);
+
+	audio_update_rate();
+
+	int count = snd_pcm_poll_descriptors_count(pcm);
+	*fds = realloc(*fds, (nfds + count) * sizeof(struct pollfd));
+	snd_pcm_poll_descriptors(pcm, (*fds) + nfds, count);
+
+	return nfds + count;
+}
+
+void audio_quit(void){
+	snd_pcm_close(pcm);
 }
 
 void audio_get_notes(uint16_t notes[static 4]){
@@ -445,6 +475,9 @@ void audio_update_rate(void){
 	free(samples);
 	samples    = new_samples;
 	nsamples   = new_nsamples;
+
+	free(samples_tmp);
+	samples_tmp = calloc(nsamples, sizeof(float));
 
 	// TODO: these should really be adjusted more accurately to not lose samples on speed change
 	sample_ptr = samples;

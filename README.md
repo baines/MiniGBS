@@ -3,7 +3,7 @@
 MiniGBS is a small .gbs file (gameboy music) player with an ncurses UI.
 It's not cycle-accurate, but still sounds good for most of the files I've tested.
 
-## Hotkeys
+## Hotkeys:
 	n/→     Next song
 	p/←     Prev song
 	r/↑     Restart song
@@ -15,6 +15,8 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 	esc/q   Quit
 	[/]     Playback speed down/up
 	backsp. Reset playback speed
+	return  Go to track \#
+	o       Toggle oscilloscope
 
 ## Recommended Listening:
 
@@ -42,6 +44,12 @@ It's not cycle-accurate, but still sounds good for most of the files I've tested
 
 Also the included gbs/pocket.gbs file, (soundtrack to [Is That a Demo In Your Pocket?](https://www.pouet.net/prod.php?which=65997))
 
-![Screenshot](/anim.gif)
+## Screenshots:
+
+![Animated screenshot](/screenshots/anim.gif)
+![Note display](/screenshots/notes.png)
+![Chart display](/screenshots/chart.png)
+![Volume display](/screenshots/volume.png)
+![Oscilloscope](/screenshots/osc.png)
 	
 	
