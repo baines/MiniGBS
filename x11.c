@@ -72,22 +72,28 @@ int x11_init(void){
 
 		const char* msg = dlerror();
 		if(!*fn || msg){
-			dlclose(xlib);
-			xlib = NULL;
-			return -1;
+			goto fail;
 		}
 	}
 
-	x11_dpy = x11.open_dpy(NULL);
+	if(!(x11_dpy = x11.open_dpy(NULL)))
+		goto fail;
+
 	x11_win = x11.simple_win(x11_dpy, RootWindow(x11_dpy, 0), 0, 0, X11_WIN_W, X11_WIN_H, 0, 0, BlackPixel(x11_dpy, 0));
 
 	int op, ev, err;
-	x11.query_ext(x11_dpy, "Present", &op, &ev, &err);
-	x11_present_op = x11.init_ext(x11_dpy, "Present")->major_opcode;
+	if(!x11.query_ext(x11_dpy, "Present", &op, &ev, &err))
+		goto fail;
+
+	XExtCodes* xec = x11.init_ext(x11_dpy, "Present");
+	if(!xec)
+		goto fail;
+
+	x11_present_op = xec->major_opcode;
 	x11.flush(x11_dpy);
 
-	x11_pix = x11.create_pix(x11_dpy, x11_win, X11_WIN_W, X11_WIN_H, 24);
-	x11.flush(x11_dpy);
+	if(!(x11_pix = x11.create_pix(x11_dpy, x11_win, X11_WIN_W, X11_WIN_H, 24)))
+		goto fail;
 
 	XGCValues gcv = {
 		.foreground = WhitePixel(x11_dpy, 0),
@@ -100,6 +106,9 @@ int x11_init(void){
 	gcv.background = WhitePixel(x11_dpy, 0);
 	x11_gc2 = x11.create_gc(x11_dpy, x11_pix, GCForeground | GCBackground | GCLineWidth, &gcv);
 
+	if(!x11_gc || !x11_gc2)
+		goto fail;
+
 	x11.store_name(x11_dpy, x11_win, "MiniGBS Oscilloscope");
 	x11.sel_input(x11_dpy, x11_win, KeyPressMask);
 
@@ -107,6 +116,12 @@ int x11_init(void){
     x11.set_protos(x11_dpy, x11_win, &x11_atom_wm_delete, 1);
 
 	return ConnectionNumber(x11_dpy);
+
+fail:
+	dlclose(xlib);
+	x11_dpy = xlib = NULL;
+	x11_win = 0;
+	return -1;
 }
 
 int x11_action(bool* have_more_events){
