@@ -193,7 +193,7 @@ int ui_init(void){
 	if(!cfg.monochrome){
 		start_color();
 
-		if(can_change_color() && COLORS > 8){
+		if(can_change_color() && COLORS > 100){
 			init_color(COLOR_BLACK, 91, 91, 102);
 		}
 
