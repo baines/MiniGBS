@@ -7,13 +7,16 @@
 #include <ncurses.h>
 #include <sys/eventfd.h>
 
+struct regs;
 struct GBSHeader;
 struct Config;
 struct pollfd;
 
 void cpu_frame (void);
 
-void debug_dump (uint8_t* op);
+void debug_dump      (uint8_t* op, struct regs*);
+void debug_separator (void);
+void debug_msg       (const char* fmt, ...);
 
 int  audio_init        (struct pollfd**, int);
 void audio_quit        (void);
@@ -56,7 +59,7 @@ struct GBSHeader {
 	char     copyright[32];
 } __attribute__((packed));
 
-struct {
+struct regs {
 	union {
 		uint16_t af;
 		struct {
@@ -71,7 +74,7 @@ struct {
 	union { uint16_t de; struct { uint8_t e, d; }; };
 	union { uint16_t hl; struct { uint8_t l, h; }; };
 	uint16_t sp, pc;
-} regs;
+};
 
 enum UIMode {
 	UI_MODE_REGISTERS,
@@ -91,7 +94,7 @@ enum UIAction {
 };
 
 struct Config {
-	bool debug_mode;
+	int debug_mode;
 	bool monochrome;
 	bool hide_ui;
 	bool subdued;

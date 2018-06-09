@@ -336,8 +336,6 @@ static ssize_t osc_find_transition(float* start, float* end){
 
 void ui_osc_draw(int chan, float* samples, size_t count){
 	struct osc_chan* c = osc_chans + chan;
-	const float height = 120.0f;
-	const float y_mid = (height/2.0f) + (height*(float)chan);
 
 	count /= 2;
 

@@ -2,12 +2,6 @@
 #include <alsa/asoundlib.h>
 #include <math.h>
 
-#if 0
-#define dbg_printf printf
-#else
-#define dbg_printf(...)
-#endif
-
 struct chan_len_ctr {
 	int   load;
 	bool  enabled;
@@ -461,9 +455,7 @@ void audio_update_rate(void){
 
 	audio_rate *= cfg.speed;
 
-	if(cfg.debug_mode){
-		printf("Audio rate changed: %.4f\n", audio_rate);
-	}
+	debug_msg("Audio rate changed: %.4f", audio_rate);
 
 	size_t new_nsamples = (int)(FREQ / audio_rate) * 2;
 	float* new_samples = calloc(new_nsamples, sizeof(float));
@@ -489,7 +481,7 @@ void chan_trigger(int i){
 
 	if(cfg.debug_mode){
 		static const char* cname[] = { "sq1", "sq2", "wave", "noise" };
-		printf("(trigger %s)\n", cname[i]);
+		debug_msg("Trigger %s", cname[i]);
 	}
 
 	chan_enable(i, 1);
@@ -533,15 +525,20 @@ void chan_trigger(int i){
 
 void audio_write(uint16_t addr, uint8_t val){
 
-	if(cfg.debug_mode){
-		printf("Audio write: %4x <- %2x\n", addr, val);
-	}
-
 	if(!cfg.subdued && mem[addr] != val){
 		ui_regs_set(addr, audio_rate / 8);
 	}
 
 	int i = (addr - 0xFF10)/5;
+
+	if(cfg.debug_mode){
+		if(addr <= 0xFF26){
+			int j = (addr - 0xFF10)%5;
+			debug_msg("Audio write: %4x / NR%1d%1d <- %2x", addr, i+1, j, val);
+		} else {
+			debug_msg("Audio write: %4x <- %2x", addr, val);
+		}
+	}
 
 	switch(addr){
 
@@ -556,14 +553,14 @@ void audio_write(uint16_t addr, uint8_t val){
 
 				if((chans[i].env.step == 0 && chans[i].env.inc != 0)){
 					if(val & 0x08){
-						if(cfg.debug_mode) puts("(zombie vol++)");
+						debug_msg("(zombie vol++)");
 						chans[i].volume++;
 					} else {
-						if(cfg.debug_mode) puts("(zombie vol+=2)");
+						debug_msg("(zombie vol+=2)");
 						chans[i].volume+=2;
 					}
 				} else {
-					if(cfg.debug_mode) puts("(zombie swap)");
+					debug_msg("(zombie swap)");
 					chans[i].volume = 16 - chans[i].volume;
 				}
 

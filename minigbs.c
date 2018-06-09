@@ -19,14 +19,15 @@ uint8_t* mem;
 
 static uint8_t* banks[32];
 static struct GBSHeader h;
+static struct regs regs;
 
 void bank_switch(int which){
-	if(cfg.debug_mode) printf("Bank switching to %d.\n", which);
+	debug_msg("Bank switching to %d.", which);
 
 	// allowing bank switch to 0 seems to break some games
 	if(which > 0 && which < 32 && banks[which]){
 		memcpy(mem + 0x4000, banks[which], 0x4000);
-		if(cfg.debug_mode) puts("Bank switch success.");
+		debug_msg("Bank switch success.");
 	}
 }
 
@@ -36,24 +37,20 @@ static inline void mem_write(uint16_t addr, uint8_t val){
 	} else if(addr >= 0xFF10 && addr <= 0xFF40){
 		audio_write(addr, val);
 	} else if(addr < 0x8000){
-		if(cfg.debug_mode){
-			printf("rom write?: [%4x] <- [%2x]\n", addr, val);
-		}
+		debug_msg("rom write?: [%4x] <- [%2x]", addr, val);
 	} else if(addr == 0xFF06 || addr == 0xFF07){
 		if(mem[addr] != val){
 			mem[addr] = val;
 			audio_update_rate();
 		}
 	} else {
-		if(cfg.debug_mode){
-			switch(addr){
-				case 0xFF04: printf("DIV write: %2x\n", val); break;
-				case 0xFF05: printf("TIMA write: %2x\n", val); break;
-				case 0xFF0F: printf("IF write: %2x\n", val); break;
-				case 0xFF41: printf("STAT: %2x\n", val); break;
-				case 0xFF46: printf("DMA: %2x\n", val); break;
-				case 0xFFFF: printf("IE: %2x\n", val); break;
-			}
+		switch(addr){
+			case 0xFF04: debug_msg("DIV write: %2x", val); break;
+			case 0xFF05: debug_msg("TIMA write: %2x", val); break;
+			case 0xFF0F: debug_msg("IF write: %2x", val); break;
+			case 0xFF41: debug_msg("STAT: %2x", val); break;
+			case 0xFF46: debug_msg("DMA: %2x", val); break;
+			case 0xFFFF: debug_msg("IE: %2x", val); break;
 		}
 		mem[addr] = val;
 	}
@@ -76,17 +73,26 @@ static inline uint8_t mem_read(uint16_t addr){
 
 	if(cfg.debug_mode){
 		switch(addr){
-			case 0xFF10 ... 0xFF40: printf("Audio read: [%4x] = [%2x]\n", addr, val); break;
-			case 0xFF04: printf("DIV read: %2x\n", val); break;
-			case 0xFF05: printf("TIMA read: %2x\n", val); break;
-			case 0xFF06: printf("TMA read: %2x\n", val); break;
-			case 0xFF07: printf("TAC read: %2x\n", val); break;
-			case 0xFF0F: printf("IF read: %2x\n", val); break;
-			case 0xFF41: printf("STAT read: %2x\n", val); break;
-			case 0xFF46: printf("DMA read: %2x\n", val); break;
-			case 0xFFFF: printf("IE read: %2x\n", val); break;
+			case 0xFF10 ... 0xFF26: {
+				int i = (addr - 0xFF00)/5;
+				int j = (addr - 0xFF00)%5;
+				debug_msg("Audio read : %4x / NR%1d%1d -> %2x", addr, i, j, val);
+				break;
+			}
+			case 0xFF27 ... 0xFF40:
+				debug_msg("Audio read : %4x -> %2x", addr, val);
+				break;
+			case 0xFF04: debug_msg("DIV read: %2x", val); break;
+			case 0xFF05: debug_msg("TIMA read: %2x", val); break;
+			case 0xFF06: debug_msg("TMA read: %2x", val); break;
+			case 0xFF07: debug_msg("TAC read: %2x", val); break;
+			case 0xFF0F: debug_msg("IF read: %2x", val); break;
+			case 0xFF41: debug_msg("STAT read: %2x", val); break;
+			case 0xFF46: debug_msg("DMA read: %2x", val); break;
+			case 0xFFFF: debug_msg("IE read: %2x", val); break;
 		}
 	}
+
 	return val;
 }
 
@@ -101,9 +107,7 @@ bool cpu_step(void){
 	unsigned cycles = 0;
 
 	if(cfg.debug_mode){
-		printf("[PC:%4x] [SP:%4x] [AF:%4x] [BC:%4x] [DE:%4x] [HL:%4x] [%2x] ",
-		       regs.pc, regs.sp, regs.af, regs.bc, regs.de, regs.hl, op);
-		debug_dump(mem + regs.pc);
+		debug_dump(mem + regs.pc, &regs);
 	}
 
 #define OP(x) &&op_##x
@@ -195,7 +199,7 @@ bool cpu_step(void){
 
 	OP(mov8, 1, 4, {
 		if(z == 6 && y == 6){
-			puts("HALT?");
+			debug_msg("HALT?");
 		} else {
 			if(z == 6 || y == 6){ cycles += 4; }
 			R_WRITE(y, R_READ(z));
@@ -616,9 +620,7 @@ void cpu_frame(void){
 		cpu_step();
 	}
 
-	if(cfg.debug_mode){
-		puts("-------------------------");
-	}
+	debug_separator();
 
 	regs.pc = h.play_addr;
 	regs.sp -= 2;
@@ -635,12 +637,6 @@ static void usage(const char* argv0, FILE* out){
 			"  -q, Quiet mode   : Disable UI.\n"
 			"  -s, Subdued mode : Don't flash/embolden changed registers.\n\n",
 			argv0);
-}
-
-static uint64_t get_time(void){
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return (ts.tv_sec * 1000000UL) + (ts.tv_nsec / 1000UL);
 }
 
 static void fd_clear(int fd){
@@ -696,7 +692,8 @@ int main(int argc, char** argv){
 	while((opt = getopt(argc, argv, "dhmqs")) != -1){
 		switch(opt){
 			case 'd':
-				cfg.hide_ui = cfg.debug_mode = true;
+				cfg.hide_ui = true;
+				cfg.debug_mode++;
 				break;
 			case 'h':
 				usage(prog, stdout);
@@ -776,8 +773,6 @@ int main(int argc, char** argv){
 	mprotect(mem - 0x1000 , 0x1000, PROT_NONE);
 	mprotect(mem + 0x10000, 0x1000, PROT_NONE);
 
-	fseek(f, 0, SEEK_END);
-	long fsz = ftell(f) - 0x70;
 	fseek(f, 0x70, SEEK_SET);
 
 	if(cfg.debug_mode){

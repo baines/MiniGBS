@@ -1,9 +1,16 @@
 SRC     := minigbs.c debug.c audio.c ui.c x11.c
-CFLAGS  := -g -O0 -D_GNU_SOURCE -std=gnu99
+CFLAGS  := -g
 LDFLAGS := -lncursesw -ltinfo -lm -lasound -ldl
+INSTALL := install -D
+prefix  := /usr/local
 
 minigbs: $(SRC) minigbs.h
-	$(CC) $(CFLAGS) $(SRC) -o $@ $(LDFLAGS)
+	$(CC) $(SRC) -D_GNU_SOURCE -std=gnu99 $(CFLAGS) -o $@ $(LDFLAGS)
+
+install: minigbs
+	$(INSTALL) $< $(DESTDIR)$(prefix)/bin/minigbs
 
 clean:
 	$(RM) minigbs
+
+.PHONY: install clean
