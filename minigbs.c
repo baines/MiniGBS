@@ -74,9 +74,9 @@ static inline uint8_t mem_read(uint16_t addr){
 	if(cfg.debug_mode){
 		switch(addr){
 			case 0xFF10 ... 0xFF26: {
-				int i = (addr - 0xFF00)/5;
-				int j = (addr - 0xFF00)%5;
-				debug_msg("Audio read : %4x / NR%1d%1d -> %2x", addr, i, j, val);
+				int i = (addr - 0xFF10)/5;
+				int j = (addr - 0xFF10)%5;
+				debug_msg("Audio read : %4x / NR%1d%1d -> %2x", addr, i+1, j, val);
 				break;
 			}
 			case 0xFF27 ... 0xFF40:
