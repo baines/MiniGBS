@@ -113,9 +113,6 @@ struct Config {
 extern struct Config cfg;
 extern uint8_t* mem;
 
-extern int evfd_audio_request;
-extern int evfd_audio_ready;
-
 #define MAX(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a >  _b ? _a : _b; })
 #define MIN(a, b) ({ typeof(a) _a = (a); typeof(b) _b = (b); _a <= _b ? _a : _b; })
 #define countof(x) (sizeof(x)/sizeof(*x))

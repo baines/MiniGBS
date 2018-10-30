@@ -21,7 +21,7 @@ static uint8_t* banks[32];
 static struct GBSHeader h;
 static struct regs regs;
 
-void bank_switch(int which){
+static void bank_switch(int which){
 	debug_msg("Bank switching to %d.", which);
 
 	// allowing bank switch to 0 seems to break some games
@@ -96,14 +96,13 @@ static inline uint8_t mem_read(uint16_t addr){
 	return val;
 }
 
-bool cpu_step(void){
+static void cpu_step(void){
 
 	uint8_t op = mem[regs.pc];
 	size_t x = op >> 6;
 	size_t y = (op >> 3) & 7;
 	size_t z = op & 7;
 
-	bool is_ret = false;
 	unsigned cycles = 0;
 
 	if(cfg.debug_mode){
@@ -356,7 +355,6 @@ bool cpu_step(void){
 			regs.pc = ((mem_read(regs.sp+1) << 8) | mem_read(regs.sp)) - 1;
 			regs.sp += 2;
 			cycles += 12;
-			is_ret = true;
 		}
 	});
 
@@ -387,14 +385,12 @@ bool cpu_step(void){
 	OP(ret, 0, 16, {
 		regs.pc = (mem_read(regs.sp+1) << 8 | mem_read(regs.sp));
 		regs.sp += 2;
-		is_ret = true;
 	});
 
 	OP(reti, 0, 16, {
 		regs.pc = mem_read(regs.sp+1) << 8 | mem_read(regs.sp);
 		regs.sp += 2;
 		// XXX: interrupts not implemented
-		is_ret = true;
 	});
 
 	OP(jphl, 0, 4, {
@@ -612,17 +608,18 @@ bool cpu_step(void){
 	});
 
 end:;
-	return is_ret;
 }
 
 void cpu_frame(void){
-	while(regs.sp != h.sp){
+
+	while(regs.sp != h.sp || regs.pc){
 		cpu_step();
 	}
 
 	debug_separator();
 
 	regs.pc = h.play_addr;
+	mem[regs.sp-1] = mem[regs.sp-2] = 0;
 	regs.sp -= 2;
 
 	ui_redraw(&h);
@@ -881,7 +878,9 @@ restart:
 
 	memcpy(mem, mem + h.load_addr, 0x62);
 
+	mem[(h.sp-1)&0xffff] = mem[(h.sp-2)&0xffff] = 0;
 	regs.sp = h.sp - 2;
+
 	regs.pc = h.init_addr;
 	regs.a = cfg.song_no;
 
