@@ -14,10 +14,11 @@ I might release it to the insobot repo if there's interest and I find the energy
 up all the hardcoded paths etc...
 
 The changes to minigbs include:
-	- UI Changes e.g. vol + notes display together
-	- Track changing by sending a packet to the @minigbs_ctrl abstract unix socket (DGRAM)
-		- Packet format is "[track_no] [space] [path_to_gbs]"
-	- Launch with -c to connect to another minigbs and display the chart view in a separate terminal
+
+  - UI Changes e.g. vol + notes display together
+  - Track changing by sending a packet to the @minigbs\_ctrl abstract unix socket (DGRAM)
+    - Packet format is "\[track\_no\] \[space\] \[path\_to\_gbs\]"
+  - Launch with -c to connect to another minigbs and display the chart view in a separate terminal
 
 ## Hotkeys:
 	n/→     Next song
