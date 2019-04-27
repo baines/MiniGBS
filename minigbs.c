@@ -66,7 +66,7 @@ static inline uint8_t mem_read(uint16_t addr){
 		0xff, 0xff, 0x00, 0x00, 0xbf,
 		0x00, 0x00, 0x70
 	};
-	
+
 	if(addr >= 0xFF10 && addr <= 0xFF26){
 		val |= ortab[addr - 0xFF10];
 	}
@@ -681,12 +681,25 @@ static void config_write(void){
 	fclose(f);
 }
 
-int main(int argc, char** argv){
+enum {
+	FD_STDIN,
+	FD_SIGNAL,
+	FD_DRAW_TIMER,
+	FD_GUI,
+};
+
+static struct pollfd* fds;
+static int nfds;
+static int draw_timer;
+
+void init_once(int* argc, char*** argv){
 	setlocale(LC_ALL, "");
-	char* prog = argv[0];
+	char* prog = (*argv)[0];
+
+	bool do_radio_tune = false;
 
 	int opt;
-	while((opt = getopt(argc, argv, "dhmqs")) != -1){
+	while((opt = getopt(*argc, *argv, "dhmqscr")) != -1){
 		switch(opt){
 			case 'd':
 				cfg.hide_ui = true;
@@ -694,7 +707,7 @@ int main(int argc, char** argv){
 				break;
 			case 'h':
 				usage(prog, stdout);
-				return 0;
+				exit(0);
 			case 'm':
 				cfg.monochrome = true;
 				break;
@@ -704,47 +717,106 @@ int main(int argc, char** argv){
 			case 's':
 				cfg.subdued = true;
 				break;
+			case 'c':
+				radio_client();
+				break;
+			case 'r':
+				do_radio_tune = true;
+				break;
 			default:
 				usage(prog, stderr);
-				return 1;
+				exit(1);
 		}
 	}
 
-	if(optind >= argc){
+	if(optind >= *argc){
 		fprintf(stderr, "Missing file argument.\n\n");
-		usage(argv[0], stderr);
-		return 1;
+		usage((*argv)[0], stderr);
+		exit(1);
 	}
 
-	argc -= (optind-1);
-	argv += (optind-1);
+	*argc -= (optind-1);
+	*argv += (optind-1);
 
-	FILE* f = fopen(argv[1], "r");
+	if(do_radio_tune){
+		radio_tune(*argc, *argv);
+		exit(0);
+	}
+
+	mem = mmap(NULL, 0x12000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	assert(mem != MAP_FAILED);
+	mem += 0x1000;
+
+	mprotect(mem - 0x1000 , 0x1000, PROT_NONE);
+	mprotect(mem + 0x10000, 0x1000, PROT_NONE);
+
+	config_read();
+
+	sigset_t      sigmask;
+	sigemptyset (&sigmask);
+	sigaddset   (&sigmask, SIGWINCH);
+
+	int sigfd = signalfd(-1, &sigmask, 0);
+
+	draw_timer = timerfd_create(CLOCK_MONOTONIC, 0);
+	struct itimerspec ts = {
+		.it_value.tv_nsec = 1,
+		.it_interval.tv_nsec = UINT64_C(1000000000) / UINT64_C(60),
+	};
+	timerfd_settime(draw_timer, 0, &ts, NULL);
+
+#define NFDS 4
+	fds = calloc(NFDS, sizeof(struct pollfd));
+	{
+		struct pollfd tmp[NFDS] = {
+			[FD_STDIN]      = { STDIN_FILENO , POLLIN },
+			[FD_SIGNAL]     = { sigfd        , POLLIN },
+			[FD_DRAW_TIMER] = { draw_timer   , POLLIN },
+			[FD_GUI]        = { ui_init()    , POLLIN },
+		};
+		memcpy(fds, tmp, sizeof(tmp));
+	}
+
+	nfds = audio_init(&fds, NFDS);
+	radio_init(&fds, &nfds);
+
+	// hack to avoid ALSA warnings breaking the UI
+	if(!cfg.hide_ui){
+		fclose(stderr);
+	}
+}
+
+void init_file(void){
+
+	const char* path = cfg.filename;
+	int song = cfg.song_no;
+
+	FILE* f = fopen(path, "r");
 	if(!f){
-		fprintf(stderr, "Error opening file '%s': %m\n", argv[1]);
-		return 1;
+		fprintf(stderr, "Error opening file '%s': %m\n", path);
+		exit(1);
 	}
 
 	if(fread(&h, sizeof(h), 1, f) != 1){
-		return 1;
+		exit(1);
 	}
 
 	if(strncmp(h.id, "GBS", 3) != 0){
 		fprintf(stderr, "That doesn't look like a GBS file.\n");
-		return 1;
+		exit(1);
 	}
 
 	if(h.version != 1){
 		fprintf(stderr, "This GBS file is version %d, I can only handle version 1 :(\n", h.version);
-		return 1;
+		exit(1);
 	}
 
 	cfg.song_count = h.song_count;
-	cfg.song_no = argc > 2 ? atoi(argv[2]) : MAX(0, h.start_song - 1);
+	cfg.song_no = song != -1 ? song : MAX(0, h.start_song - 1);
 
 	if(cfg.song_no >= h.song_count){
 		fprintf(stderr, "The file says it has %d tracks, index %d is out of range.\n", h.song_count, cfg.song_no);
-		return 1;
+		exit(1);
 	}
 
 	if(cfg.debug_mode){
@@ -763,17 +835,16 @@ int main(int argc, char** argv){
 		printf("copyr: %.32s\n", h.copyright);
 	}
 
-	mem = mmap(NULL, 0x12000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	assert(mem != MAP_FAILED);
-	mem += 0x1000;
-
-	mprotect(mem - 0x1000 , 0x1000, PROT_NONE);
-	mprotect(mem + 0x10000, 0x1000, PROT_NONE);
-
 	fseek(f, 0x70, SEEK_SET);
 
 	if(cfg.debug_mode){
 		puts("rom banks:");
+	}
+
+	for(int i = 0; i < 32; ++i){
+		if(!banks[i]) continue;
+		munmap(banks[i], 0x4000);
+		banks[0] = NULL;
 	}
 
 	int bno = h.load_addr / 0x4000;
@@ -802,7 +873,23 @@ int main(int argc, char** argv){
 			exit(1);
 		}
 	}
+
 	fclose(f);
+}
+
+#define FADE_OUT_MAX (60 * 4)
+
+int main(int argc, char** argv){
+
+	cfg.volume = 1.0f;
+	cfg.speed  = 1.0f;
+
+	init_once(&argc, &argv);
+
+	cfg.filename = strdup(argv[1]);
+	cfg.song_no = argc > 2 ? atoi(argv[2]) : -1;
+
+	bool paused;
 
 	static const uint8_t regs_init[] = {
 		0x80, 0xBF, 0xF3, 0xFF, 0x3F, 0xFF, 0x3F, 0x00,
@@ -817,57 +904,8 @@ int main(int argc, char** argv){
 		0xac, 0xdd, 0xda, 0x48
 	};
 
-	mem[0xff06] = h.tma;
-	mem[0xff07] = h.tac;
-
-	cfg.volume = 1.0f;
-	cfg.speed  = 1.0f;
-
-	config_read();
-
-	sigset_t      sigmask;
-	sigemptyset (&sigmask);
-	sigaddset   (&sigmask, SIGWINCH);
-
-	int sigfd = signalfd(-1, &sigmask, 0);
-
-	int draw_timer = timerfd_create(CLOCK_MONOTONIC, 0);
-	struct itimerspec ts = {
-		.it_value.tv_nsec = 1,
-		.it_interval.tv_nsec = UINT64_C(1000000000) / UINT64_C(60),
-	};
-	timerfd_settime(draw_timer, 0, &ts, NULL);
-
-	enum {
-		FD_STDIN,
-		FD_SIGNAL,
-		FD_DRAW_TIMER,
-		FD_GUI,
-	};
-
-#define NFDS 4
-	struct pollfd* fds = calloc(NFDS, sizeof(struct pollfd));
-	{
-		struct pollfd tmp[NFDS] = {
-			[FD_STDIN]      = { STDIN_FILENO , POLLIN },
-			[FD_SIGNAL]     = { sigfd        , POLLIN },
-			[FD_DRAW_TIMER] = { draw_timer   , POLLIN },
-			[FD_GUI]        = { ui_init()    , POLLIN },
-		};
-		memcpy(fds, tmp, sizeof(tmp));
-	}
-
-	int nfds = audio_init(&fds, NFDS);
-
-	// hack to avoid ALSA warnings breaking the UI
-	if(!cfg.hide_ui){
-		fclose(stderr);
-	}
-
-	bool paused;
-
 restart:
-	audio_reset();
+	init_file();
 	ui_reset();
 
 	if(banks[0]) memcpy(mem, banks[0], 0x4000);
@@ -888,6 +926,8 @@ restart:
 	mem[0xff06] = h.tma;
 	mem[0xff07] = h.tac;
 
+	audio_reset();
+
 	for(int i = 0; i < 23; ++i){
 		mem_write(0xFF10 + i, regs_init[i]);
 	}
@@ -895,6 +935,8 @@ restart:
 
 	paused = false;
 	audio_pause(false);
+
+	int fade_out_ctr = 0;
 
 	while(1){
 		int n = poll(fds, nfds, -1);
@@ -915,7 +957,21 @@ restart:
 		if(fds[FD_DRAW_TIMER].revents & POLLIN){
 			fd_clear(draw_timer);
 			ui_refresh();
+			radio_frame();
+
+			if(fade_out_ctr > 0){
+				cfg.volume = MAX(0, (float)(fade_out_ctr - 30) / (float)(FADE_OUT_MAX - 30));
+				ui_msg_set("Volume: %d%%\n", (int)(cfg.volume * 100.0f));
+				if(--fade_out_ctr == 0){
+					cfg.volume = 1.0f;
+					ui_msg_set("Volume: 100%%\n");
+					goto restart;
+				}
+			}
 		}
+
+		if(radio_event(&fds, &nfds))
+			fade_out_ctr = FADE_OUT_MAX;
 
 		bool tui_events = fds[FD_STDIN].revents & POLLIN;
 		bool gui_events = fds[FD_GUI].revents & POLLIN;

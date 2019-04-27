@@ -12,7 +12,7 @@ void x11_draw_end   (void);
 void x11_toggle     (void);
 
 #define GRID_W 60
-#define GRID_H 60
+#define GRID_H 78
 
 bool ui_in_cmd_mode;
 
@@ -37,12 +37,12 @@ void ui_chart_set(uint16_t notes[static 3]){
 	for(int i = 0; i < 3; ++i){
 		int n = notes[i] - 5;
 		if(n < 0 || n >= GRID_H) continue;
-		
+
 		(*col)[n] |= (1 << i);
 	}
 }
 
-static void ui_chart_draw(void){
+void ui_chart_draw(void){
 	static const char* glyphs[3] = {
 		" ", "▀", "▄",
 	};
@@ -224,7 +224,7 @@ int ui_init(void){
 
 static void ui_notes_draw(uint16_t notes[static 4]){
 	static const char* note_strs[] = {
-		"A-", "A#", "B-", "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#"
+		"C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"
 	};
 
 	move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+9);
@@ -235,7 +235,7 @@ static void ui_notes_draw(uint16_t notes[static 4]){
 			printw("[ ");
 			attron(COLOR_PAIR(i+1));
 			int octave = MAX(0, MIN(notes[i] / 12, 9));
-			printw("%s%d", note_strs[notes[i] % 12], octave);
+			printw("%s%d", note_strs[(notes[i] + 9) % 12], octave);
 			attroff(COLOR_PAIR(i+1));
 			printw(" ]     ");
 		} else {
@@ -262,7 +262,7 @@ static void ui_volume_draw(uint16_t notes[static 4]){
 	}
 
 	for(int i = 0; i < 4; ++i){
-		move((cfg.win_h-6)/6+9, (cfg.win_w-47)/2+3+(12*i));
+		move((cfg.win_h-6)/6+12, (cfg.win_w-47)/2+3+(12*i));
 
 		attron(COLOR_PAIR(i+11));
 		for(int j = 3; j --> 0 ;) {
@@ -366,11 +366,8 @@ void ui_redraw(struct GBSHeader* h){
 		ui_info_draw(h);
 		ui_regs_draw();
 
-		if(cfg.ui_mode == UI_MODE_REGISTERS){
-			ui_notes_draw(notes);
-		} else {
-			ui_volume_draw(notes);
-		}
+		ui_notes_draw(notes);
+		ui_volume_draw(notes);
 	}
 }
 
@@ -393,7 +390,11 @@ void ui_refresh(void){
 		struct osc_chan* c = osc_chans + i;
 
 		const float y_mid = height / 2 + height * i;
-		const ssize_t off = i == 3 ? OSC_SAMPLES - OSC_W : osc_find_transition(c->samples + off_start, c->samples + off_end);
+		ssize_t off = osc_find_transition(c->samples + off_start, c->samples + off_end);
+
+		if(i == 3 && off != -1){
+			off = OSC_SAMPLES - OSC_W;
+		}
 
 		if(off != -1){
 			for(size_t j = 0; j < OSC_W; ++j){

@@ -3,6 +3,22 @@
 MiniGBS is a small .gbs file (gameboy music) player with an ncurses UI.
 It's not cycle-accurate, but still sounds good for most of the files I've tested.
 
+## Radio Branch
+
+This branch has modifications used for the MiniGBS Radio idea that I briefly tested
+on Twitch. Here's a clip of how the entire setup looked: https://i.abaines.me.uk/f99e1f66.mp4
+
+The top right UI is a separate program, gbsradio, which is included on this branch.
+The whole thing was orchestrated by an insobot module, however, which is not included here.
+I might release it to the insobot repo if there's interest and I find the energy to clean
+up all the hardcoded paths etc...
+
+The changes to minigbs include:
+	- UI Changes e.g. vol + notes display together
+	- Track changing by sending a packet to the @minigbs_ctrl abstract unix socket (DGRAM)
+		- Packet format is "[track_no] [space] [path_to_gbs]"
+	- Launch with -c to connect to another minigbs and display the chart view in a separate terminal
+
 ## Hotkeys:
 	n/→     Next song
 	p/←     Prev song

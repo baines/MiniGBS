@@ -312,6 +312,7 @@ void audio_reset(void){
 	sample_ptr = samples;
 	sample_end = samples + nsamples;
 	chans[0].val = chans[1].val = -1;
+	audio_update_rate();
 }
 
 void audio_pause(bool p){

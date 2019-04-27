@@ -96,14 +96,14 @@ int x11_init(void){
 		goto fail;
 
 	XGCValues gcv = {
-		.foreground = WhitePixel(x11_dpy, 0),
-		.background = BlackPixel(x11_dpy, 0),
+		.foreground = 0xffcccccc,
+		.background = 0xff17171A,
 		.line_width = 2,
 	};
 
 	x11_gc = x11.create_gc(x11_dpy, x11_pix, GCForeground | GCBackground | GCLineWidth, &gcv);
-	gcv.foreground = BlackPixel(x11_dpy, 0);
-	gcv.background = WhitePixel(x11_dpy, 0);
+	gcv.foreground = 0xff17171A;
+	gcv.background = 0xffcccccc;
 	x11_gc2 = x11.create_gc(x11_dpy, x11_pix, GCForeground | GCBackground | GCLineWidth, &gcv);
 
 	if(!x11_gc || !x11_gc2)

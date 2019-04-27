@@ -40,6 +40,13 @@ void ui_reset     (void);
 int  ui_cmd       (int key);
 void ui_osc_draw  (int chan, float* samples, size_t n);
 int  ui_action    (int* val, bool* tui, bool* x11);
+void ui_chart_draw(void);
+
+void radio_init   (struct pollfd** fds, int* nfds);
+int  radio_event  (struct pollfd** fds, int* nfds);
+void radio_frame  (void);
+void radio_client (void);
+void radio_tune   (int argc, char** argv);
 
 extern bool ui_in_cmd_mode;
 
@@ -99,6 +106,7 @@ struct Config {
 	bool hide_ui;
 	bool subdued;
 
+	char* filename;
 	int song_no;
 	int song_count;
 
