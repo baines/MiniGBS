@@ -509,16 +509,17 @@ void chan_trigger(int i){
 		c->sweep.counter = nexttowardf(1.0f, 1.1f);
 	}
 
-	int len_max = 64;
-
 	if(i == 2){ // wave
-		len_max = 256;
 		c->val = 0;
 	} else if(i == 3){ // noise
 		c->lfsr_reg = 0xFFFF;
 		c->val = -1;
 	}
+}
 
+void chan_update_len(int i) {
+	struct chan* c = chans + i;
+	int len_max = i == 2 ? 256 : 64;
 	c->len.inc = (256.0f / (float)(len_max - c->len.load)) / FREQ;
 	c->len.counter = 0.0f;
 }
@@ -559,7 +560,7 @@ void audio_write(uint16_t addr, uint8_t val){
 						debug_msg("(zombie vol+=2)");
 						chans[i].volume+=2;
 					}
-				} else {
+				} else if(chans[i].env.step != (val & 0x07)) {
 					debug_msg("(zombie swap)");
 					chans[i].volume = 16 - chans[i].volume;
 				}
@@ -578,8 +579,9 @@ void audio_write(uint16_t addr, uint8_t val){
 		case 0xFF20:
 			chans[i].len.load = val & 0x3f;
 			chans[i].duty = duty_lookup[val >> 6];
+			chan_update_len(i);
 			break;
-			
+
 		case 0xFF1B:
 			chans[i].len.load = val;
 			break;
