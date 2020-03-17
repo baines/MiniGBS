@@ -584,6 +584,7 @@ void audio_write(uint16_t addr, uint8_t val){
 
 		case 0xFF1B:
 			chans[i].len.load = val;
+			chan_update_len(i);
 			break;
 
 		case 0xFF13:
