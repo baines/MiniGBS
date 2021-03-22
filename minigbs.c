@@ -21,7 +21,7 @@ static uint8_t* banks[32];
 static struct GBSHeader h;
 static struct regs regs;
 
-static void bank_switch(int which){
+static void bank_switch(uint8_t which){
 	debug_msg("Bank switching to %d.", which);
 
 	if (which == 0){
