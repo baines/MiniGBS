@@ -24,8 +24,11 @@ static struct regs regs;
 static void bank_switch(int which){
 	debug_msg("Bank switching to %d.", which);
 
-	// allowing bank switch to 0 seems to break some games
-	if(which > 0 && which < 32 && banks[which]){
+	if (which == 0){
+		which = 1;
+	}
+
+	if(which < 32 && banks[which]){
 		memcpy(mem + 0x4000, banks[which], 0x4000);
 		debug_msg("Bank switch success.");
 	}
