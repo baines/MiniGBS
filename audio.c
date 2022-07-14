@@ -1,5 +1,4 @@
 #include "minigbs.h"
-#include <alsa/asoundlib.h>
 #include <math.h>
 
 struct chan_len_ctr {
@@ -76,9 +75,7 @@ static float audio_rate;
 static bool  muted[4]; // not in chan struct to avoid memset(0) across tracks
 static bool paused;
 
-static snd_pcm_t* pcm;
-static snd_pcm_uframes_t pcm_buffer_size;
-static snd_pcm_uframes_t pcm_period_size;
+static uint16_t pcm_period_size;
 
 float hipass(struct chan* c, float sample){
 #if 1
@@ -318,7 +315,7 @@ void audio_pause(bool p){
 	paused = p;
 }
 
-void audio_update(struct pollfd* fds, int nfds){
+float audio_update(struct pollfd* fds, int nfds){
 	static float* buf = NULL;
 	const size_t bufsz = (pcm_period_size*2) * sizeof(float);
 
@@ -329,11 +326,8 @@ void audio_update(struct pollfd* fds, int nfds){
 	float* p = buf;
 	float* end = buf + (bufsz/sizeof(float));
 
-	uint16_t ev;
-	snd_pcm_poll_descriptors_revents(pcm, fds, nfds, &ev);
-
-	if(!(ev & POLLOUT)){
-		return;
+	if(!audio_output_ready(fds, nfds)) {
+		return 0;
 	}
 
 	if(paused){
@@ -384,32 +378,29 @@ void audio_update(struct pollfd* fds, int nfds){
 		p += n;
 	}
 
-out:;
-    int err = snd_pcm_writei(pcm, buf, pcm_period_size);
-    if(err < 0){
-	    snd_pcm_recover(pcm, err, 1);
-    }
+out:
+	audio_output_write(buf, pcm_period_size);
+
+	if(paused) {
+		return 0;
+	}
+
+	return (pcm_period_size * 1000.0f / FREQ);
 }
 
 int audio_init(struct pollfd** fds, int nfds){
-	snd_pcm_open(&pcm, "default", SND_PCM_STREAM_PLAYBACK, 0);
-	snd_pcm_set_params(pcm, SND_PCM_FORMAT_FLOAT, SND_PCM_ACCESS_RW_INTERLEAVED, 2, FREQ, 1, 16667);
-	snd_pcm_get_params(pcm, &pcm_buffer_size, &pcm_period_size);
+	pcm_period_size = audio_output_init(fds, &nfds, FREQ);
 
 	logbase = log(1.059463094f);
 	charge_factor = pow(0.999958, 4194304.0 / FREQ);
 
 	audio_update_rate();
 
-	int count = snd_pcm_poll_descriptors_count(pcm);
-	*fds = realloc(*fds, (nfds + count) * sizeof(struct pollfd));
-	snd_pcm_poll_descriptors(pcm, (*fds) + nfds, count);
-
-	return nfds + count;
+	return nfds;
 }
 
 void audio_quit(void){
-	snd_pcm_close(pcm);
+	audio_output_quit();
 }
 
 void audio_get_notes(uint16_t notes[static 4]){

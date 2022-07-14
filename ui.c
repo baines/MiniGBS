@@ -416,6 +416,7 @@ void ui_quit(void){
 }
 
 void ui_reset(void){
+	if(cfg.hide_ui) return;
 	ui_in_cmd_mode = false;
 	clear();
 }

@@ -1,4 +1,4 @@
-SRC     := minigbs.c debug.c audio.c ui.c x11.c
+SRC     := minigbs.c debug.c audio.c audio_output.c wav_write.c ui.c x11.c
 CFLAGS  := -g
 LDFLAGS := -lncursesw -ltinfo -lm -lasound -ldl
 INSTALL := install -D

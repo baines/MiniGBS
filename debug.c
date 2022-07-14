@@ -334,7 +334,7 @@ static void debug_get_regs(const uint8_t* op, uint32_t* mask_out, uint32_t* len_
 	if(mask_out){
 		if(*op == 0xcb){
 			size_t z = op[1] & 7;
-			char* tmp = alloca(strlen(cb_regnames[z])+1);
+			char* tmp = alloca(strlen(cb_regnames[z])+2);
 			*tmp = ' ';
 			strcpy(tmp+1, cb_regnames[z]);
 			str = tmp;
@@ -442,10 +442,10 @@ static void debug_print_colour_reg_16(uint32_t mask, void* regs, off_t offset){
 		;
 
 	printf("\e[%dm%s\e[0m:\e[%dm%04x\e[0m ",
-	       name_colour,
-	       reg_by_offset[offset].name,
-	       val_colour,
-	       a);
+		   name_colour,
+		   reg_by_offset[offset].name,
+		   val_colour,
+		   a);
 }
 
 static void debug_print_colour_reg(uint32_t mask, void* regs, off_t offset){
@@ -526,7 +526,7 @@ void debug_dump(uint8_t* op, struct regs* regs){
 		printf("| ");
 	} else {
 		printf("%04x: %s| SP:%04x AF:%04x BC:%04x DE:%04x HL:%04x | ",
-		       regs->pc, op_str, regs->sp, regs->af, regs->bc, regs->de, regs->hl);
+			   regs->pc, op_str, regs->sp, regs->af, regs->bc, regs->de, regs->hl);
 	}
 
 	char mnemomic[15];
