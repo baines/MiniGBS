@@ -69,7 +69,7 @@ static inline uint8_t mem_read(uint16_t addr){
 		0xff, 0xff, 0x00, 0x00, 0xbf,
 		0x00, 0x00, 0x70
 	};
-	
+
 	if(addr >= 0xFF10 && addr <= 0xFF26){
 		val |= ortab[addr - 0xFF10];
 	}
@@ -630,12 +630,14 @@ void cpu_frame(void){
 
 static void usage(const char* argv0, FILE* out){
 	fprintf(out,
-	        "Usage: %s [-dhmqs] file [song index]\n\n"
+			"Usage: %s [-dhmqswt] file [song index]\n\n"
 			"  -h, Output this info to stdout.\n\n"
 			"  -d, Debug mode   : Dump a cpu trace to stdout, implies -q.\n"
 			"  -m, Mono mode    : Disable colors.\n"
 			"  -q, Quiet mode   : Disable UI.\n"
-			"  -s, Subdued mode : Don't flash/embolden changed registers.\n\n",
+			"  -s, Subdued mode : Don't flash/embolden changed registers.\n\n"
+			"  -w <file>, Write .wav to specified file instead of usual behaviour.\n"
+			"  -t <secs>, Number of seconds of audio to write (default 120).\n\n",
 			argv0);
 }
 
@@ -689,7 +691,7 @@ int main(int argc, char** argv){
 	char* prog = argv[0];
 
 	int opt;
-	while((opt = getopt(argc, argv, "dhmqs")) != -1){
+	while((opt = getopt(argc, argv, "dhmqsw:t:")) != -1){
 		switch(opt){
 			case 'd':
 				cfg.hide_ui = true;
@@ -706,6 +708,13 @@ int main(int argc, char** argv){
 				break;
 			case 's':
 				cfg.subdued = true;
+				break;
+			case 'w':
+				cfg.write_wav = true;
+				cfg.output_filename = strdup(optarg);
+				break;
+			case 't':
+				cfg.output_duration_ms = strtof(optarg, NULL) * 1000.0f;
 				break;
 			default:
 				usage(prog, stderr);
@@ -828,11 +837,42 @@ int main(int argc, char** argv){
 
 	config_read();
 
+	if(cfg.write_wav) {
+		audio_output = output_wav;
+	} else {
+		audio_output = output_alsa;
+	}
+
+	if(!audio_output->interactive) {
+		cfg.hide_ui = true;
+		cfg.volume = 1.0;
+
+		if(!cfg.output_filename) {
+			fprintf(stderr, "No output filename supplied.\n");
+			exit(1);
+		}
+
+		if(cfg.output_duration_ms <= 0) {
+			cfg.output_duration_ms = 2 * 60 * 1000.0f;
+		}
+
+		printf("Writing %gs of audio to %s...\n", cfg.output_duration_ms / 1000.0f, cfg.output_filename);
+
+		audio_output->filename = cfg.output_filename;
+	}
+
+	if(!cfg.hide_ui) {
+		initscr();
+	}
+
 	sigset_t      sigmask;
 	sigemptyset (&sigmask);
 	sigaddset   (&sigmask, SIGWINCH);
+	sigaddset   (&sigmask, SIGINT);
 
-	int sigfd = signalfd(-1, &sigmask, 0);
+	int sigfd = signalfd(-1, &sigmask, SFD_NONBLOCK);
+
+	sigprocmask(SIG_BLOCK, &sigmask, NULL);
 
 	int draw_timer = timerfd_create(CLOCK_MONOTONIC, 0);
 	struct itimerspec ts = {
@@ -868,8 +908,10 @@ int main(int argc, char** argv){
 	}
 
 	bool paused;
+	float elapsed_ms;
 
 restart:
+	elapsed_ms = 0;
 	audio_reset();
 	ui_reset();
 
@@ -906,13 +948,38 @@ restart:
 			continue;
 		}
 
-		audio_update(fds + NFDS, nfds - NFDS);
+		elapsed_ms += audio_update(fds + NFDS, nfds - NFDS);
+
+		if(cfg.output_duration_ms > 0 && elapsed_ms > cfg.output_duration_ms) {
+			goto end;
+		}
 
 		if(fds[FD_SIGNAL].revents & POLLIN){
-			endwin();
-			refresh();
-			clear();
-			getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+			struct signalfd_siginfo info;
+			bool redraw = false;
+			ssize_t n;
+
+			do {
+				n = read(fds[FD_SIGNAL].fd, &info, sizeof(info));
+				if(n == -1) {
+					if(errno != EAGAIN) {
+						perror("read");
+					}
+				} else {
+					if(info.ssi_signo == SIGWINCH) {
+						redraw = true;
+					} else if(info.ssi_signo == SIGINT) {
+						goto end;
+					}
+				}
+			} while(n > 0);
+
+			if(redraw && !cfg.hide_ui) {
+				endwin();
+				refresh();
+				clear();
+				getmaxyx(stdscr, cfg.win_h, cfg.win_w);
+			}
 		}
 
 		if(fds[FD_DRAW_TIMER].revents & POLLIN){
@@ -931,8 +998,8 @@ restart:
 
 				case ACT_CHAN_TOGGLE:
 					ui_msg_set("Channel %c %smuted\n",
-					           value + '0',
-					           audio_mute(value, -1) ? "" : "un");
+							   value + '0',
+							   audio_mute(value, -1) ? "" : "un");
 					break;
 
 				case ACT_TRACK_SET:

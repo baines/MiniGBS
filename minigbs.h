@@ -20,7 +20,7 @@ void debug_msg       (const char* fmt, ...);
 
 int  audio_init        (struct pollfd**, int);
 void audio_quit        (void);
-void audio_update      (struct pollfd*, int);
+float audio_update     (struct pollfd*, int);
 void audio_reset       (void);
 void audio_write       (uint16_t addr, uint8_t val);
 void audio_pause       (bool);
@@ -28,6 +28,26 @@ bool audio_mute        (int chan, int val);
 void audio_update_rate (void);
 void audio_get_notes   (uint16_t[static 4]);
 void audio_get_vol     (uint8_t vol[static 8]);
+
+struct audio_output {
+	const bool interactive;
+
+	uint16_t (*init)  (struct audio_output*, struct pollfd** fds, int* nfds, float freq);
+	void     (*quit)  (struct audio_output*);
+	bool     (*ready) (struct audio_output*, struct pollfd* fds, int nfds);
+	void     (*write) (struct audio_output*, const float* samples, uint16_t period_size);
+
+	const char* filename; // to be set by main code if interactive is false
+};
+
+uint16_t audio_output_init  (struct pollfd**, int* nfds, float freq);
+void     audio_output_quit  (void);
+bool     audio_output_ready (struct pollfd* fds, int nfds);
+void     audio_output_write (const float* samples, uint16_t period_size);
+
+extern struct audio_output* audio_output;
+extern struct audio_output* output_alsa;
+extern struct audio_output* output_wav;
 
 int  ui_init      (void);
 void ui_msg_set   (const char* fmt, ...);
@@ -98,6 +118,11 @@ struct Config {
 	bool monochrome;
 	bool hide_ui;
 	bool subdued;
+
+	bool write_wav;
+
+	const char* output_filename;
+	float output_duration_ms;
 
 	int song_no;
 	int song_count;
